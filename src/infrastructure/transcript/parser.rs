@@ -84,6 +84,9 @@ struct ParseState {
     /// Set when a compaction boundary has been seen but the rebuilt context
     /// has not been measured yet. The next assistant usage supplies it.
     awaiting_rebuild: bool,
+    /// The most recent timestamp actually seen in the transcript, used to
+    /// place records that carry none. See [`ParseState::at_or_position`].
+    last_timestamp: Option<DateTime<Utc>>,
 }
 
 /// What a still-unanswered tool call was.
@@ -103,6 +106,7 @@ impl ParseState {
             pending_labels: HashMap::new(),
             last_context: 0,
             awaiting_rebuild: false,
+            last_timestamp: None,
         }
     }
 
@@ -130,6 +134,7 @@ impl ParseState {
                 self.snapshot.started_at = Some(ts);
             }
             self.snapshot.last_activity_at = Some(ts);
+            self.last_timestamp = Some(ts);
         }
         if self.snapshot.project_dir.is_none() {
             self.snapshot.project_dir.clone_from(&record.cwd);
@@ -141,7 +146,11 @@ impl ParseState {
         match record.r#type.as_str() {
             "assistant" => self.absorb_assistant(record),
             "user" => self.absorb_user(record),
-            "summary" => self.absorb_compaction(record),
+            // Only an explicit compaction boundary counts. A `summary`
+            // record is Claude Code's own resume/title bookkeeping: it carries
+            // no timestamp and no usage, so treating it as a compaction would
+            // invent an event dated at parse time and then charge the next
+            // real response's whole prompt to it as rebuild cost.
             "system" if record.subtype.as_deref() == Some("compact_boundary") => {
                 self.absorb_compaction(record);
             }
@@ -290,7 +299,7 @@ impl ParseState {
             turn: self.current_turn,
             prompt_tokens,
             output_tokens: usage.output,
-            at: record.timestamp.unwrap_or_else(Utc::now),
+            at: self.at_or_position(record.timestamp),
         });
     }
 
@@ -321,10 +330,13 @@ impl ParseState {
             },
         );
 
+        // Dated before the borrow below, because `push_capped` takes
+        // `self.snapshot` mutably and `at_or_position` reads `self`.
+        let at = self.at_or_position(record.timestamp);
         push_capped(
             &mut self.snapshot.recent_tools,
             ToolEvent {
-                at: record.timestamp.unwrap_or_else(Utc::now),
+                at,
                 name,
                 kind,
                 subject,
@@ -446,7 +458,7 @@ impl ParseState {
             context_before: self.last_context,
             context_after: 0,
             turns_in_segment: self.snapshot.turns_since_compaction,
-            at: record.timestamp.unwrap_or_else(Utc::now),
+            at: self.at_or_position(record.timestamp),
         });
         self.snapshot.turns_since_compaction = 0;
         self.awaiting_rebuild = true;
@@ -458,14 +470,25 @@ impl ParseState {
         );
     }
 
+    /// Dates a record that carries no timestamp of its own.
+    ///
+    /// Such a record belongs where it sits in the file, so it inherits the
+    /// last timestamp seen; one with no predecessor belongs at the very start.
+    /// The obvious alternative, `Utc::now()`, is wrong twice over: it sorts
+    /// every undated record *after* every real one, which breaks the
+    /// `partition_point` searches in `SessionSnapshot::current_segment` and
+    /// `compaction_marker_indices`, and it yields a different answer on every
+    /// re-read of a file that is re-parsed on each change.
+    fn at_or_position(&self, at: Option<DateTime<Utc>>) -> DateTime<Utc> {
+        at.or(self.last_timestamp)
+            .unwrap_or(DateTime::<Utc>::MIN_UTC)
+    }
+
     fn log(&mut self, at: Option<DateTime<Utc>>, level: LogLevel, text: String) {
+        let at = self.at_or_position(at);
         push_capped(
             &mut self.snapshot.events,
-            LogEntry {
-                at: at.unwrap_or_else(Utc::now),
-                level,
-                text,
-            },
+            LogEntry { at, level, text },
             EVENT_LOG_CAPACITY,
         );
     }
@@ -580,6 +603,40 @@ mod tests {
         assert_eq!(event.context_after, 40_000);
         assert_eq!(event.turns_in_segment, 1);
         assert_eq!(snapshot.turns_since_compaction, 0);
+    }
+
+    #[test]
+    fn a_summary_record_is_bookkeeping_and_not_a_compaction() {
+        // Claude Code writes a `summary` line for its own resume/title
+        // bookkeeping. It carries no timestamp and no usage, so counting it
+        // as a compaction used to invent an event dated at parse time and
+        // then charge the next real response's whole prompt to it as rebuild
+        // cost -- reporting a session that never compacted as having wasted
+        // its entire context.
+        let summary = r#"{"type":"summary","summary":"earlier work","leafUuid":"u1"}"#;
+        let snapshot = parse(&[summary, USER, &assistant(0, 40_000, 5)]);
+
+        assert!(snapshot.compactions.is_empty());
+        assert_eq!(
+            snapshot.efficiency(),
+            Some(1.0),
+            "a session that never compacted wasted nothing"
+        );
+    }
+
+    #[test]
+    fn a_record_with_no_timestamp_is_dated_where_it_sits_not_when_it_was_read() {
+        // `Utc::now()` would sort this call after every real entry and give a
+        // different answer on every re-read of the file.
+        let undated = r#"{"type":"assistant","message":{"model":"claude-opus-5","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/a/b.rs"}}]}}"#;
+        let snapshot = parse(&[USER, undated]);
+
+        let call = snapshot.recent_tools.back().expect("one call");
+        assert_eq!(
+            call.at,
+            snapshot.started_at.expect("a dated first entry"),
+            "it inherits the last timestamp actually seen"
+        );
     }
 
     #[test]
