@@ -86,7 +86,7 @@ fn draw_header(frame: &mut Frame<'_>, area: Rect, snapshot: &SessionSnapshot, ph
 
     let mut spans = vec![
         Span::styled(
-            " claudetui ",
+            " claude-stats ",
             Style::default()
                 .fg(Theme::BACKGROUND)
                 .bg(Theme::CYAN)

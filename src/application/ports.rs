@@ -37,7 +37,7 @@ pub enum SessionSelector {
     /// The most recently written transcript belonging to the current working
     /// directory, falling back to the most recent one anywhere.
     ///
-    /// This is what `claudetui monitor` does with no arguments, and it is the
+    /// This is what `claude-stats monitor` does with no arguments, and it is the
     /// behaviour that makes the dashboard useful in a second terminal: open
     /// it next to a session and it attaches to that session.
     #[default]

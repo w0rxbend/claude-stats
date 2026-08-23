@@ -1,4 +1,4 @@
-//! The one-shot text and JSON reports behind `claudetui stats`.
+//! The one-shot text and JSON reports behind `claude-stats stats`.
 //!
 //! Separate from the dashboard because the audiences are different. The
 //! dashboard is watched; a report is read once, pasted into an issue, or piped

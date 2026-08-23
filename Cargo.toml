@@ -1,13 +1,13 @@
 [package]
-name = "claudetui"
+name = "claude-stats"
 version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 description = "A colourful terminal dashboard for Claude Code sessions: context fill, cost, cache ratio, compaction distance and live tool activity, parsed straight from the session transcript."
 authors = ["Oleksandr Balyshyn <balyszyn@gmail.com>"]
 license = "MIT"
-repository = "https://github.com/w0rxbend/claudetui-rs"
-homepage = "https://github.com/w0rxbend/claudetui-rs"
+repository = "https://github.com/w0rxbend/claude-stats"
+homepage = "https://github.com/w0rxbend/claude-stats"
 readme = "README.md"
 keywords = ["tui", "ratatui", "claude", "dashboard", "monitoring"]
 categories = ["command-line-utilities", "visualization"]

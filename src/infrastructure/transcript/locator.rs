@@ -203,7 +203,7 @@ mod tests {
         // "-home-ada-claude-stats" decodes to "/home/ada/claude/stats", which
         // is wrong for a directory actually named "claude-stats". The
         // transcript knows the truth.
-        let dir = std::env::temp_dir().join(format!("claudetui-cwd-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("claude-stats-cwd-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("abc.jsonl");
         std::fs::write(

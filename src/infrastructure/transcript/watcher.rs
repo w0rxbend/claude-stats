@@ -133,7 +133,7 @@ mod tests {
 
     #[test]
     fn appending_to_the_file_is_detected_even_within_the_same_second() {
-        let dir = std::env::temp_dir().join(format!("claudetui-watch-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("claude-stats-watch-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("session.jsonl");
         std::fs::write(&path, b"one\n").expect("write");

@@ -1,4 +1,4 @@
-//! `claudetui` -- a live dashboard for Claude Code sessions.
+//! `claude-stats` -- a live dashboard for Claude Code sessions.
 //!
 //! The crate is split the way a hexagonal architecture suggests, because the
 //! interesting logic here is arithmetic on token counts and it deserves to be

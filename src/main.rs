@@ -9,17 +9,17 @@ use std::fmt::Write as _;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use claudetui::application::monitor::Monitor;
-use claudetui::application::ports::{
+use claude_stats::application::monitor::Monitor;
+use claude_stats::application::ports::{
     SessionReader, SessionSelector, TranscriptCatalog, TranscriptRef,
 };
-use claudetui::cli::{Cli, Command};
-use claudetui::domain::model::ModelCatalog;
-use claudetui::infrastructure::transcript::locator::FileSystemCatalog;
-use claudetui::infrastructure::transcript::parser::TranscriptParser;
-use claudetui::infrastructure::transcript::watcher::FileSystemWatchFactory;
-use claudetui::report;
-use claudetui::tui::{format, runtime};
+use claude_stats::cli::{Cli, Command};
+use claude_stats::domain::model::ModelCatalog;
+use claude_stats::infrastructure::transcript::locator::FileSystemCatalog;
+use claude_stats::infrastructure::transcript::parser::TranscriptParser;
+use claude_stats::infrastructure::transcript::watcher::FileSystemWatchFactory;
+use claude_stats::report;
+use claude_stats::tui::{format, runtime};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -43,7 +43,7 @@ fn monitor(catalog: FileSystemCatalog, selector: SessionSelector) -> Result<()> 
     // sequences into whatever the output was redirected to.
     anyhow::ensure!(
         runtime::is_interactive(),
-        "the dashboard needs a terminal; try `claudetui stats` to print a report instead"
+        "the dashboard needs a terminal; try `claude-stats stats` to print a report instead"
     );
     runtime::run(Monitor::new(
         catalog,

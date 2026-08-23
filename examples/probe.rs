@@ -1,8 +1,8 @@
 //! Parses a real transcript and prints the derived metrics, as a sanity check
 //! against live data. Run with: `cargo run --example probe -- <path>`
-use claudetui::application::ports::{SessionReader, SessionSelector, TranscriptCatalog};
-use claudetui::infrastructure::transcript::locator::FileSystemCatalog;
-use claudetui::infrastructure::transcript::parser::TranscriptParser;
+use claude_stats::application::ports::{SessionReader, SessionSelector, TranscriptCatalog};
+use claude_stats::infrastructure::transcript::locator::FileSystemCatalog;
+use claude_stats::infrastructure::transcript::parser::TranscriptParser;
 
 fn main() -> anyhow::Result<()> {
     let catalog = FileSystemCatalog::from_home()?;
@@ -67,7 +67,7 @@ fn main() -> anyhow::Result<()> {
             .iter()
             .rev()
             .take(5)
-            .map(claudetui::domain::activity::ToolEvent::label)
+            .map(claude_stats::domain::activity::ToolEvent::label)
             .collect::<Vec<_>>()
     );
     println!("events       {}", s.events.len());

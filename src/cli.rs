@@ -14,7 +14,7 @@ use crate::application::ports::SessionSelector;
 
 /// A colourful terminal dashboard for Claude Code sessions.
 #[derive(Debug, Parser)]
-#[command(name = "claudetui", version, about, long_about = None)]
+#[command(name = "claude-stats", version, about, long_about = None)]
 pub struct Cli {
     /// What to run. Defaults to the live dashboard.
     #[command(subcommand)]
@@ -104,14 +104,14 @@ mod tests {
 
     #[test]
     fn with_no_flags_the_active_session_is_followed() {
-        let cli = Cli::parse_from(["claudetui"]);
+        let cli = Cli::parse_from(["claude-stats"]);
         assert_eq!(cli.selection.selector(), SessionSelector::Active);
         assert!(cli.command.is_none());
     }
 
     #[test]
     fn the_more_specific_selector_wins_over_the_broader_one() {
-        let cli = Cli::parse_from(["claudetui", "--session", "abc", "--project", "/tmp"]);
+        let cli = Cli::parse_from(["claude-stats", "--session", "abc", "--project", "/tmp"]);
         assert_eq!(
             cli.selection.selector(),
             SessionSelector::Id("abc".to_owned())
@@ -120,7 +120,7 @@ mod tests {
 
     #[test]
     fn selection_flags_work_after_a_subcommand_too() {
-        let cli = Cli::parse_from(["claudetui", "stats", "--session", "abc"]);
+        let cli = Cli::parse_from(["claude-stats", "stats", "--session", "abc"]);
         assert!(matches!(cli.command, Some(Command::Stats { json: false })));
         assert_eq!(
             cli.selection.selector(),

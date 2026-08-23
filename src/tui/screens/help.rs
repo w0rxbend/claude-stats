@@ -69,12 +69,12 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect) {
 ///
 /// This is a real screen rather than a blank one because "nothing is
 /// happening" and "the tool is broken" look identical otherwise, and the first
-/// thing a new user does is run `claudetui monitor` before starting a session.
+/// thing a new user does is run `claude-stats monitor` before starting a session.
 pub fn draw_searching(frame: &mut Frame<'_>, area: Rect, phase: u64) {
     let spinner = Spinner::new(SpinnerStyle::Quadrant, phase / 2).glyph();
     let lines = vec![
         Line::from(Span::styled(
-            "claudetui",
+            "claude-stats",
             Style::default()
                 .fg(Theme::CYAN)
                 .add_modifier(Modifier::BOLD),

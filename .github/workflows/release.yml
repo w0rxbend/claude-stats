@@ -88,8 +88,8 @@ jobs:
         # on a headless runner.
         if: matrix.target != 'x86_64-apple-darwin'
         run: |
-          ./target/${{ matrix.target }}/release/claudetui --version
-          ./target/${{ matrix.target }}/release/claudetui models
+          ./target/${{ matrix.target }}/release/claude-stats --version
+          ./target/${{ matrix.target }}/release/claude-stats models
 
       - name: Package
         id: package
@@ -97,9 +97,9 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          name="claudetui-${version}-${{ matrix.target }}"
+          name="claude-stats-${version}-${{ matrix.target }}"
           mkdir -p "dist/$name"
-          cp "target/${{ matrix.target }}/release/claudetui" "dist/$name/"
+          cp "target/${{ matrix.target }}/release/claude-stats" "dist/$name/"
           cp README.md LICENSE "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           echo "archive=dist/$name.tar.gz" >> "$GITHUB_OUTPUT"

@@ -1,8 +1,8 @@
 #!/bin/sh
 #
-# Installer for claudetui.
+# Installer for claude-stats.
 #
-#   curl -fsSL https://raw.githubusercontent.com/w0rxbend/claudetui-rs/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/w0rxbend/claude-stats/main/install.sh | sh
 #
 # Downloads the release binary for this machine, checks it against the
 # published checksum, and puts it somewhere on PATH. Nothing is compiled and
@@ -19,8 +19,8 @@
 
 set -eu
 
-REPO="w0rxbend/claudetui-rs"
-BINARY="claudetui"
+REPO="w0rxbend/claude-stats"
+BINARY="claude-stats"
 
 # ── output ────────────────────────────────────────────────────────────
 
@@ -163,7 +163,7 @@ main() {
     install_dir="$(choose_install_dir)"
 
     say ""
-    say "  ${C_BOLD}claudetui${C_OFF} installer"
+    say "  ${C_BOLD}claude-stats${C_OFF} installer"
     say "  ${C_DIM}version${C_OFF}  $version"
     say "  ${C_DIM}target${C_OFF}   $target"
     say "  ${C_DIM}into${C_OFF}     $install_dir"
@@ -195,7 +195,7 @@ See https://github.com/$REPO/releases for what is available."
     step "installing to $install_dir"
     mkdir -p "$install_dir" || die "cannot create $install_dir"
     # Install to a temporary name and rename into place. `mv` within a
-    # filesystem is atomic, so a running claudetui is never replaced halfway
+    # filesystem is atomic, so a running claude-stats is never replaced halfway
     # through, and an interrupted install cannot leave a truncated binary
     # where a working one used to be.
     staged="$install_dir/.$BINARY.incoming.$$"
