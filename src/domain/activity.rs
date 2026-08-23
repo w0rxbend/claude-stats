@@ -7,7 +7,10 @@ use chrono::{DateTime, Utc};
 /// The transcript only gives a tool *name* (`"Edit"`, `"Bash"`, a long
 /// `"mcp__..."` string). Classifying once, here, keeps every widget from
 /// re-deriving "is this a write?" out of a string comparison.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// The ordering is the display order in the activity mix chart: the kinds a
+/// reader most wants to see first come first, and `Ord` is what puts them in
+/// that order when they are collected into a `BTreeMap`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ToolKind {
     /// Read a file into context.
     Read,

@@ -129,6 +129,12 @@ impl CompactionDistance {
             return Self::Unknown;
         }
         let turns = (headroom as f64 / average_growth_per_turn).floor();
+        // Less than a full turn of head-room left is imminent, not "zero
+        // turns away": by the time the next response lands the threshold will
+        // already have been crossed.
+        if turns < 1.0 {
+            return Self::Imminent;
+        }
         // Anything past a hundred turns is "not soon"; reporting a precise
         // four-digit number from a two-sample average would be false precision.
         if turns > 100.0 {
@@ -178,6 +184,17 @@ mod tests {
         let fill = ContextFill::new(199_000, 200_000);
         assert_eq!(
             CompactionDistance::estimate(fill, 1_000.0),
+            CompactionDistance::Imminent
+        );
+    }
+
+    #[test]
+    fn less_than_one_turn_of_head_room_reads_as_imminent_not_zero_turns() {
+        // 200k window, 33k buffer, 160k used leaves 7k -- less than one turn
+        // at the measured 10k per turn.
+        let fill = ContextFill::new(160_000, 200_000);
+        assert_eq!(
+            CompactionDistance::estimate(fill, 10_000.0),
             CompactionDistance::Imminent
         );
     }
