@@ -12,12 +12,17 @@ use chrono::Duration;
 ///
 /// Counts below a thousand are printed exactly, because at that scale the
 /// individual digits still mean something.
+///
+/// The billions step matters once counts are summed across sessions rather
+/// than taken from one: a week of work runs to thousands of millions, and
+/// `2564.06M` is a number nobody can read at a glance.
 #[must_use]
 pub fn tokens(count: u64) -> String {
     match count {
         n if n < 1_000 => n.to_string(),
         n if n < 1_000_000 => format!("{:.1}k", n as f64 / 1_000.0),
-        n => format!("{:.2}M", n as f64 / 1_000_000.0),
+        n if n < 1_000_000_000 => format!("{:.2}M", n as f64 / 1_000_000.0),
+        n => format!("{:.2}B", n as f64 / 1_000_000_000.0),
     }
 }
 
@@ -119,6 +124,12 @@ mod tests {
         assert_eq!(tokens(1_234), "1.2k");
         assert_eq!(tokens(953_429), "953.4k");
         assert_eq!(tokens(1_234_567), "1.23M");
+        assert_eq!(tokens(999_999_999), "1000.00M", "just under the rollover");
+        assert_eq!(
+            tokens(2_564_060_000),
+            "2.56B",
+            "a week's worth of tokens stays readable"
+        );
     }
 
     #[test]
