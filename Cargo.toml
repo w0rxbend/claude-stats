@@ -1,0 +1,42 @@
+[package]
+name = "claudetui"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A colourful terminal dashboard for Claude Code sessions: context fill, cost, cache ratio, compaction distance and live tool activity, parsed straight from the session transcript."
+authors = ["Oleksandr Balyshyn <balyszyn@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/w0rxbend/claudetui-rs"
+homepage = "https://github.com/w0rxbend/claudetui-rs"
+readme = "README.md"
+keywords = ["tui", "ratatui", "claude", "dashboard", "monitoring"]
+categories = ["command-line-utilities", "visualization"]
+
+[dependencies]
+anyhow = "1.0.104"
+chrono = { version = "0.4.45", features = ["serde"] }
+clap = { version = "4.6.6", features = ["derive"] }
+crossterm = "0.29.0"
+dirs = "6.0.0"
+notify = "8.2.0"
+ratatui = "0.30.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tui-big-text = "0.8.8"
+tui-piechart = "1.0.2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
