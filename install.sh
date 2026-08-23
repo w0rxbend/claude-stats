@@ -10,8 +10,8 @@
 #
 # Knobs, all optional:
 #
-#   CLAUDETUI_VERSION=v0.2.0   install a specific release instead of the latest
-#   CLAUDETUI_INSTALL_DIR=...  install somewhere other than the default
+#   CLAUDE_STATS_VERSION=v0.3.0   install a specific release instead of the latest
+#   CLAUDE_STATS_INSTALL_DIR=...  install somewhere other than the default
 #
 # POSIX sh on purpose. The whole point of a one-line installer is that it runs
 # before anything has been set up, so it cannot assume bash -- macOS ships an
@@ -104,8 +104,8 @@ latest_version() {
 # sudo from inside a piped-in shell script is exactly the behaviour that makes
 # people distrust one-line installers.
 choose_install_dir() {
-    if [ -n "${CLAUDETUI_INSTALL_DIR:-}" ]; then
-        printf '%s' "$CLAUDETUI_INSTALL_DIR"
+    if [ -n "${CLAUDE_STATS_INSTALL_DIR:-}" ]; then
+        printf '%s' "$CLAUDE_STATS_INSTALL_DIR"
         return
     fi
     if [ -w "/usr/local/bin" ] && [ ! -d "$HOME/.local/bin" ]; then
@@ -152,7 +152,7 @@ main() {
     need uname
 
     target="$(detect_target)"
-    version="${CLAUDETUI_VERSION:-$(latest_version)}"
+    version="${CLAUDE_STATS_VERSION:-$(latest_version)}"
     [ -n "$version" ] || die "cannot determine the latest release; is $REPO published yet?"
 
     # Accept "0.2.0" as readily as "v0.2.0"; the tag carries the v.
@@ -200,7 +200,7 @@ See https://github.com/$REPO/releases for what is available."
     # where a working one used to be.
     staged="$install_dir/.$BINARY.incoming.$$"
     cp "$binary" "$staged" || die "cannot write to $install_dir
-Set CLAUDETUI_INSTALL_DIR to somewhere writable, or create $install_dir first."
+Set CLAUDE_STATS_INSTALL_DIR to somewhere writable, or create $install_dir first."
     chmod 755 "$staged"
     mv -f "$staged" "$install_dir/$BINARY"
 

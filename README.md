@@ -91,12 +91,12 @@ needed. It will tell you if that directory is not on your `PATH`.
 Two optional knobs:
 
 ```bash
-CLAUDETUI_VERSION=v0.1.0 curl -fsSL .../install.sh | sh   # pin a version
-CLAUDETUI_INSTALL_DIR=/usr/local/bin curl -fsSL .../install.sh | sh
+CLAUDE_STATS_VERSION=v0.3.0 curl -fsSL .../install.sh | sh   # pin a version
+CLAUDE_STATS_INSTALL_DIR=/usr/local/bin curl -fsSL .../install.sh | sh
 ```
 
 The installer never escalates to `sudo` on its own. If you want it somewhere privileged,
-say so with `CLAUDETUI_INSTALL_DIR` and run it under `sudo` yourself.
+say so with `CLAUDE_STATS_INSTALL_DIR` and run it under `sudo` yourself.
 
 ### Prebuilt binaries
 
