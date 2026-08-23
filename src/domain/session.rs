@@ -140,6 +140,13 @@ pub struct SessionSnapshot {
 
     /// Token usage summed over every response in the session.
     pub totals: TokenUsage,
+    /// What the session has cost, accumulated response by response at the
+    /// price of the model that answered each one.
+    ///
+    /// Kept rather than derived from [`Self::totals`] because a session can be
+    /// switched between models mid-conversation, and pricing the whole total
+    /// at any one model's rates would then be wrong for every other one.
+    pub cost_accrued: Usd,
     /// Per-response history, oldest first.
     pub samples: Vec<ResponseSample>,
 
@@ -201,6 +208,7 @@ impl SessionSnapshot {
             turns: 0,
             responses: 0,
             totals: TokenUsage::ZERO,
+            cost_accrued: Usd::ZERO,
             samples: Vec::new(),
             compactions: Vec::new(),
             turns_since_compaction: 0,
@@ -285,8 +293,8 @@ impl SessionSnapshot {
 
     /// What the session has cost so far.
     #[must_use]
-    pub fn cost(&self) -> Usd {
-        self.totals.cost(ModelCatalog::pricing_for(&self.model_id))
+    pub const fn cost(&self) -> Usd {
+        self.cost_accrued
     }
 
     /// Average cost of one user turn.

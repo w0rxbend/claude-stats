@@ -14,6 +14,7 @@ use chrono::{DateTime, Utc};
 use super::records::{Block, Record};
 use crate::application::ports::{SessionReader, TranscriptRef};
 use crate::domain::activity::{ToolEvent, ToolKind};
+use crate::domain::model::ModelCatalog;
 use crate::domain::session::{
     CompactionEvent, EVENT_LOG_CAPACITY, LogEntry, LogLevel, RECENT_TOOL_CAPACITY, ResponseSample,
     SessionPhase, SessionSnapshot, TurnCounters,
@@ -253,10 +254,13 @@ impl ParseState {
             return;
         };
 
-        if self.snapshot.model_id.is_empty() {
-            if let Some(model) = &message.model {
-                self.snapshot.model_id.clone_from(model);
-            }
+        // The latest model wins, not the first. A session can be switched
+        // with `/model` part-way through, and every figure that depends on
+        // the model -- the context window the gauge is drawn against, and the
+        // price of the responses from here on -- belongs to the model that is
+        // answering now.
+        if let Some(model) = &message.model {
+            self.snapshot.model_id.clone_from(model);
         }
 
         self.snapshot.responses += 1;
@@ -282,6 +286,12 @@ impl ParseState {
 
     fn absorb_usage(&mut self, record: &Record, usage: crate::domain::tokens::TokenUsage) {
         self.snapshot.totals += usage;
+        // Priced as we go rather than by applying one model's rates to the
+        // session total at the end: a session that switched models would
+        // otherwise bill all of its tokens at whichever model happened to be
+        // recorded last.
+        self.snapshot.cost_accrued +=
+            usage.cost(ModelCatalog::pricing_for(&self.snapshot.model_id));
         let prompt_tokens = usage.prompt_tokens();
         self.last_context = prompt_tokens;
 
@@ -603,6 +613,35 @@ mod tests {
         assert_eq!(event.context_after, 40_000);
         assert_eq!(event.turns_in_segment, 1);
         assert_eq!(snapshot.turns_since_compaction, 0);
+    }
+
+    #[test]
+    fn a_session_switched_between_models_is_priced_at_each_model_in_turn() {
+        // `/model` part-way through a session used to bill every token at the
+        // first model's rates and draw the gauge against its window.
+        fn response(model: &str, input: u64) -> String {
+            format!(
+                r#"{{"type":"assistant","timestamp":"2026-08-23T10:00:01Z","message":{{"model":"{model}","content":[],"usage":{{"input_tokens":{input},"output_tokens":0}}}}}}"#
+            )
+        }
+        let snapshot = parse(&[
+            USER,
+            &response("claude-haiku-4-5", 1_000_000),
+            &response("claude-opus-5", 1_000_000),
+        ]);
+
+        let haiku = ModelCatalog::pricing_for("claude-haiku-4-5").input;
+        let opus = ModelCatalog::pricing_for("claude-opus-5").input;
+        let expected = haiku.dollars_per_million() + opus.dollars_per_million();
+        assert!(
+            (snapshot.cost().dollars() - expected).abs() < 1e-9,
+            "each million was billed at the model that answered it"
+        );
+        assert_eq!(
+            snapshot.context_window(),
+            ModelCatalog::context_window_for("claude-opus-5"),
+            "the gauge follows the model answering now, not the first one seen"
+        );
     }
 
     #[test]
