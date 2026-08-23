@@ -21,6 +21,13 @@ pub struct FileSystemCatalog {
 }
 
 impl FileSystemCatalog {
+    /// How many lines to read looking for the recorded working directory.
+    ///
+    /// The first line of a session is often a bookkeeping entry with no `cwd`,
+    /// so one line is not always enough; a handful always is, and it keeps
+    /// listing 190 sessions to a few kilobytes of reads.
+    const CWD_SCAN_LINES: usize = 8;
+
     /// Points the catalogue at `~/.claude/projects`.
     ///
     /// # Errors
@@ -46,17 +53,42 @@ impl FileSystemCatalog {
     }
 
     /// Best-effort inverse of [`Self::encode_project_dir`], for display only.
+    ///
+    /// Only used when the transcript itself does not say where it came from.
+    /// The encoding cannot be inverted correctly -- a directory named
+    /// `claude-stats` and a path `claude/stats` encode identically -- so
+    /// [`Self::recorded_project_dir`] is tried first and this is the fallback.
     fn decode_project_dir(encoded: &str) -> String {
         format!("/{}", encoded.trim_start_matches('-').replace('-', "/"))
     }
 
-    fn describe(path: &Path, project_dir: &str) -> Option<TranscriptRef> {
+    /// The working directory the transcript itself records.
+    ///
+    /// Every entry Claude Code writes carries a `cwd` field, so the first few
+    /// lines are enough and there is no need to parse the whole file. This is
+    /// authoritative where the directory-name encoding is only a guess.
+    fn recorded_project_dir(path: &Path) -> Option<String> {
+        use std::io::{BufRead, BufReader};
+
+        let file = std::fs::File::open(path).ok()?;
+        BufReader::new(file)
+            .lines()
+            .take(Self::CWD_SCAN_LINES)
+            .map_while(Result::ok)
+            .find_map(|line| {
+                let record: super::records::Record = serde_json::from_str(&line).ok()?;
+                record.cwd
+            })
+    }
+
+    fn describe(path: &Path, fallback_project_dir: &str) -> Option<TranscriptRef> {
         let metadata = std::fs::metadata(path).ok()?;
         let modified_at: DateTime<Utc> = metadata.modified().ok()?.into();
         Some(TranscriptRef {
             session_id: path.file_stem()?.to_string_lossy().into_owned(),
+            project_dir: Self::recorded_project_dir(path)
+                .unwrap_or_else(|| fallback_project_dir.to_owned()),
             path: path.to_path_buf(),
-            project_dir: project_dir.to_owned(),
             modified_at,
             size_bytes: metadata.len(),
         })
@@ -152,6 +184,27 @@ mod tests {
         let once = FileSystemCatalog::encode_project_dir(Path::new("/a/b"));
         assert_eq!(once, "-a-b");
         assert_eq!(FileSystemCatalog::decode_project_dir(&once), "/a/b");
+    }
+
+    #[test]
+    fn the_transcripts_own_cwd_beats_the_lossy_directory_name() {
+        // "-home-ada-claude-stats" decodes to "/home/ada/claude/stats", which
+        // is wrong for a directory actually named "claude-stats". The
+        // transcript knows the truth.
+        let dir = std::env::temp_dir().join(format!("claudetui-cwd-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("abc.jsonl");
+        std::fs::write(
+            &path,
+            b"{\"type\":\"bridge-session\"}\n{\"type\":\"user\",\"cwd\":\"/home/ada/claude-stats\"}\n",
+        )
+        .expect("write");
+
+        let described = FileSystemCatalog::describe(&path, "/home/ada/claude/stats")
+            .expect("described");
+        assert_eq!(described.project_dir, "/home/ada/claude-stats");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

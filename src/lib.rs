@@ -17,6 +17,8 @@
 //! `domain`, and `domain` knows about nobody.
 
 pub mod application;
+pub mod cli;
 pub mod domain;
 pub mod infrastructure;
+pub mod report;
 pub mod tui;

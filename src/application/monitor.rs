@@ -106,6 +106,13 @@ where
         self.attached.as_ref()
     }
 
+    /// The catalogue this monitor searches, so a caller can list every
+    /// session without being handed a second, possibly divergent, catalogue.
+    #[must_use]
+    pub const fn catalog(&self) -> &C {
+        &self.catalog
+    }
+
     /// The most recent read failure, if any.
     #[must_use]
     pub fn last_error(&self) -> Option<&str> {
