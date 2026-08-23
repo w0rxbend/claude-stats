@@ -12,8 +12,9 @@ use crate::tui::widgets::spinner::{Spinner, SpinnerStyle};
 
 /// Every key the dashboard listens for, with what it does.
 ///
-/// One table, used both to draw this overlay and to build the footer hint, so
-/// the two can never disagree about what a key does.
+/// The full list, shown in this overlay. The footer hint in
+/// `App::draw_footer` is a deliberately shorter per-view subset, written by
+/// hand and worded for its view, so a new binding has to be added there too.
 pub const KEYS: &[(&str, &str)] = &[
     ("q / Esc", "quit"),
     ("d", "dashboard"),
