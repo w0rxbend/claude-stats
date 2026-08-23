@@ -273,9 +273,7 @@ impl SessionSnapshot {
         let Some(last_compaction) = self.compactions.last() else {
             return &self.samples;
         };
-        let start = self
-            .samples
-            .partition_point(|s| s.at <= last_compaction.at);
+        let start = self.samples.partition_point(|s| s.at <= last_compaction.at);
         &self.samples[start..]
     }
 

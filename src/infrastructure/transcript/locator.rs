@@ -96,9 +96,9 @@ impl FileSystemCatalog {
 
     /// Every transcript in one project directory.
     fn transcripts_in(dir: &Path) -> Vec<TranscriptRef> {
-        let project_dir = dir
-            .file_name()
-            .map_or_else(String::new, |n| Self::decode_project_dir(&n.to_string_lossy()));
+        let project_dir = dir.file_name().map_or_else(String::new, |n| {
+            Self::decode_project_dir(&n.to_string_lossy())
+        });
         let Ok(entries) = std::fs::read_dir(dir) else {
             return Vec::new();
         };
@@ -130,12 +130,12 @@ impl TranscriptCatalog for FileSystemCatalog {
 
     fn resolve(&self, selector: &SessionSelector) -> Result<Option<TranscriptRef>> {
         match selector {
-            SessionSelector::Path(path) => {
-                Ok(Self::describe(path, &path.parent().map_or_else(
-                    String::new,
-                    |p| p.to_string_lossy().into_owned(),
-                )))
-            }
+            SessionSelector::Path(path) => Ok(Self::describe(
+                path,
+                &path
+                    .parent()
+                    .map_or_else(String::new, |p| p.to_string_lossy().into_owned()),
+            )),
             SessionSelector::Id(prefix) => Ok(self
                 .list()?
                 .into_iter()
@@ -160,7 +160,9 @@ impl TranscriptCatalog for FileSystemCatalog {
 
 impl FileSystemCatalog {
     fn newest_for_project(&self, project_dir: &Path) -> Option<TranscriptRef> {
-        let dir = self.projects_dir.join(Self::encode_project_dir(project_dir));
+        let dir = self
+            .projects_dir
+            .join(Self::encode_project_dir(project_dir));
         let mut found = Self::transcripts_in(&dir);
         found.sort_by_key(|t| std::cmp::Reverse(t.modified_at));
         found.into_iter().next()
@@ -200,8 +202,8 @@ mod tests {
         )
         .expect("write");
 
-        let described = FileSystemCatalog::describe(&path, "/home/ada/claude/stats")
-            .expect("described");
+        let described =
+            FileSystemCatalog::describe(&path, "/home/ada/claude/stats").expect("described");
         assert_eq!(described.project_dir, "/home/ada/claude-stats");
 
         std::fs::remove_dir_all(&dir).ok();

@@ -127,8 +127,9 @@ impl crate::application::ports::ChangeSourceFactory for FileSystemWatchFactory {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::Write;
+
+    use super::*;
 
     #[test]
     fn appending_to_the_file_is_detected_even_within_the_same_second() {

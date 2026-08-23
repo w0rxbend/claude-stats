@@ -68,10 +68,7 @@ impl<'a> OutputSparkline<'a> {
                 let end = start + chunk.len();
                 Bucket {
                     value: chunk.iter().copied().max().unwrap_or(0),
-                    compacted: self
-                        .compactions
-                        .iter()
-                        .any(|&i| (start..end).contains(&i)),
+                    compacted: self.compactions.iter().any(|&i| (start..end).contains(&i)),
                 }
             })
             .collect()
@@ -157,12 +154,7 @@ mod tests {
     }
 
     /// Renders into a `width` x `height` area and returns every row, top first.
-    fn render_rows(
-        values: &[u64],
-        compactions: &[usize],
-        width: u16,
-        height: u16,
-    ) -> Vec<String> {
+    fn render_rows(values: &[u64], compactions: &[usize], width: u16, height: u16) -> Vec<String> {
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
         OutputSparkline::new(values, compactions).render(area, &mut buf);
@@ -225,7 +217,10 @@ mod tests {
         // maximum, so the second column is the tall one.
         let values: Vec<u64> = vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 100];
         let drawn = render(&values, &[], 2);
-        assert!(drawn.ends_with('\u{2588}'), "the spike must survive: {drawn:?}");
+        assert!(
+            drawn.ends_with('\u{2588}'),
+            "the spike must survive: {drawn:?}"
+        );
     }
 
     #[test]

@@ -102,7 +102,11 @@ fn draw_header(frame: &mut Frame<'_>, area: Rect, snapshot: &SessionSnapshot, ph
         .as_deref()
         .map(|p| format::fit(p, 34, true));
     for (icon, text, colour) in [
-        (Icon::TOKEN, Some(snapshot.model_display_name()), Theme::VIOLET),
+        (
+            Icon::TOKEN,
+            Some(snapshot.model_display_name()),
+            Theme::VIOLET,
+        ),
         (Icon::FILE, project, Theme::TEXT),
         (Icon::BRANCH, snapshot.git_branch.clone(), Theme::MINT),
         (
@@ -165,14 +169,18 @@ fn draw_tiles(frame: &mut Frame<'_>, area: Rect, snapshot: &SessionSnapshot) {
     };
 
     let tiles = [
-        StatTile::new(Icon::CONTEXT, "CONTEXT", format::percent_precise(fill.ratio()))
-            .accent(severity_colour)
-            .emphasised(severity >= FillSeverity::Hot)
-            .footnote(format!(
-                "{} / {}",
-                format::tokens(fill.used()),
-                format::tokens(fill.window())
-            )),
+        StatTile::new(
+            Icon::CONTEXT,
+            "CONTEXT",
+            format::percent_precise(fill.ratio()),
+        )
+        .accent(severity_colour)
+        .emphasised(severity >= FillSeverity::Hot)
+        .footnote(format!(
+            "{} / {}",
+            format::tokens(fill.used()),
+            format::tokens(fill.window())
+        )),
         StatTile::new(Icon::COST, "COST", snapshot.cost().to_string())
             .accent(Theme::CYAN)
             .footnote(format!("{}/turn", snapshot.cost_per_turn())),
@@ -182,7 +190,10 @@ fn draw_tiles(frame: &mut Frame<'_>, area: Rect, snapshot: &SessionSnapshot) {
             cache.map_or_else(|| "\u{2014}".to_owned(), format::percent_precise),
         )
         .accent(cache_colour)
-        .footnote(format!("{} read", format::tokens(snapshot.totals.cache_read))),
+        .footnote(format!(
+            "{} read",
+            format::tokens(snapshot.totals.cache_read)
+        )),
         StatTile::new(Icon::COMPACT, "COMPACTION", compaction_text)
             .accent(compaction_colour)
             .emphasised(matches!(
@@ -217,8 +228,7 @@ fn draw_context_panel(frame: &mut Frame<'_>, area: Rect, snapshot: &SessionSnaps
         return;
     }
 
-    let [bar, caption] =
-        Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(inner);
+    let [bar, caption] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(inner);
     frame.render_widget(ContextGauge::new(fill), bar);
 
     let until = fill.tokens_until_compaction();
@@ -337,10 +347,7 @@ fn draw_activity(frame: &mut Frame<'_>, area: Rect, snapshot: &SessionSnapshot, 
     let block = panel("live tool activity", Theme::MAGENTA);
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    frame.render_widget(
-        ToolFeed::new(&snapshot.recent_tools, running, phase),
-        inner,
-    );
+    frame.render_widget(ToolFeed::new(&snapshot.recent_tools, running, phase), inner);
 }
 
 fn draw_turn(frame: &mut Frame<'_>, area: Rect, snapshot: &SessionSnapshot) {
@@ -415,7 +422,12 @@ fn panel(title: &str, accent: ratatui::style::Color) -> Block<'_> {
 }
 
 /// One `icon label value` group, for packing several readings onto a line.
-fn field<'a>(icon: &'a str, label: &'a str, value: &str, colour: ratatui::style::Color) -> Span<'a> {
+fn field<'a>(
+    icon: &'a str,
+    label: &'a str,
+    value: &str,
+    colour: ratatui::style::Color,
+) -> Span<'a> {
     Span::styled(
         format!("{icon} {label} {value}   "),
         Style::default().fg(colour),
@@ -449,8 +461,7 @@ mod tests {
     }
 
     fn render_at(width: u16, height: u16) -> String {
-        let mut terminal =
-            Terminal::new(TestBackend::new(width, height)).expect("test terminal");
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("test terminal");
         let snapshot = sample_snapshot();
         terminal
             .draw(|frame| draw(frame, frame.area(), &snapshot, 0))

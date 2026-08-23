@@ -2,8 +2,8 @@
 
 use std::ops::{Add, AddAssign};
 
-use super::money::Usd;
 use super::model::ModelPricing;
+use super::money::Usd;
 
 /// The four token counters the Claude API reports for one assistant response.
 ///

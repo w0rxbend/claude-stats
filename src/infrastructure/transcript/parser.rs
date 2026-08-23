@@ -11,14 +11,13 @@ use std::path::Path;
 
 use chrono::{DateTime, Utc};
 
+use super::records::{Block, Record};
 use crate::application::ports::{SessionReader, TranscriptRef};
 use crate::domain::activity::{ToolEvent, ToolKind};
 use crate::domain::session::{
     CompactionEvent, EVENT_LOG_CAPACITY, LogEntry, LogLevel, RECENT_TOOL_CAPACITY, ResponseSample,
     SessionPhase, SessionSnapshot, TurnCounters,
 };
-
-use super::records::{Block, Record};
 
 /// How much of a tool's subject (a command, a search pattern) is kept.
 ///
@@ -36,7 +35,11 @@ pub struct TranscriptParser;
 impl SessionReader for TranscriptParser {
     fn read(&self, transcript: &TranscriptRef) -> anyhow::Result<SessionSnapshot> {
         let contents = std::fs::read_to_string(&transcript.path)?;
-        Ok(Self::parse(&transcript.path, &transcript.session_id, &contents))
+        Ok(Self::parse(
+            &transcript.path,
+            &transcript.session_id,
+            &contents,
+        ))
     }
 }
 
@@ -359,7 +362,10 @@ impl ParseState {
     }
 
     fn register_file_edit(&mut self, block: &Block) -> String {
-        let Some(path) = block.input_str("file_path").or_else(|| block.input_str("path")) else {
+        let Some(path) = block
+            .input_str("file_path")
+            .or_else(|| block.input_str("path"))
+        else {
             return Self::describe_tool(block);
         };
         let file = base_name(path);
@@ -381,17 +387,19 @@ impl ParseState {
             self.snapshot.lines_added += line_count(content);
             return;
         }
-        if let (Some(old), Some(new)) = (
-            block.input_str("old_string"),
-            block.input_str("new_string"),
-        ) {
+        if let (Some(old), Some(new)) =
+            (block.input_str("old_string"), block.input_str("new_string"))
+        {
             self.snapshot.lines_removed += line_count(old);
             self.snapshot.lines_added += line_count(new);
         }
     }
 
     fn register_file_read(snapshot: &mut SessionSnapshot, block: &Block) -> String {
-        let Some(path) = block.input_str("file_path").or_else(|| block.input_str("path")) else {
+        let Some(path) = block
+            .input_str("file_path")
+            .or_else(|| block.input_str("path"))
+        else {
             return Self::describe_tool(block);
         };
         let file = base_name(path);
@@ -406,7 +414,14 @@ impl ParseState {
     /// the most informative answer, and gives up quietly rather than printing
     /// a blob of JSON.
     fn describe_tool(block: &Block) -> String {
-        for key in ["command", "pattern", "query", "prompt", "url", "description"] {
+        for key in [
+            "command",
+            "pattern",
+            "query",
+            "prompt",
+            "url",
+            "description",
+        ] {
             if let Some(value) = block.input_str(key) {
                 let single_line = value.split_whitespace().collect::<Vec<_>>().join(" ");
                 if !single_line.is_empty() {
@@ -552,7 +567,8 @@ mod tests {
 
     #[test]
     fn a_compaction_records_what_it_threw_away_and_what_the_rebuild_cost() {
-        let boundary = r#"{"type":"system","subtype":"compact_boundary","timestamp":"2026-08-23T10:00:05Z"}"#;
+        let boundary =
+            r#"{"type":"system","subtype":"compact_boundary","timestamp":"2026-08-23T10:00:05Z"}"#;
         let snapshot = parse(&[
             USER,
             &assistant(0, 900_000, 5),
@@ -586,6 +602,10 @@ mod tests {
     #[test]
     fn a_subject_is_cut_on_a_character_boundary_not_a_byte_one() {
         let long = "\u{e4}".repeat(200);
-        assert_eq!(truncate(&long, 5).chars().count(), 6, "five chars plus the ellipsis");
+        assert_eq!(
+            truncate(&long, 5).chars().count(),
+            6,
+            "five chars plus the ellipsis"
+        );
     }
 }

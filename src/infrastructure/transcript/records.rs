@@ -106,9 +106,9 @@ impl Content {
     pub fn has_user_text(&self) -> bool {
         match self {
             Self::Text(s) => !s.trim().is_empty(),
-            Self::Blocks(blocks) => blocks
-                .iter()
-                .any(|b| b.r#type == "text" && b.text.as_deref().is_some_and(|t| !t.trim().is_empty())),
+            Self::Blocks(blocks) => blocks.iter().any(|b| {
+                b.r#type == "text" && b.text.as_deref().is_some_and(|t| !t.trim().is_empty())
+            }),
         }
     }
 }
@@ -238,12 +238,14 @@ mod tests {
 
     #[test]
     fn a_tool_result_payload_is_flattened_from_either_shape() {
-        let bare: Block = serde_json::from_str(r#"{"type":"tool_result","content":"oops"}"#).unwrap();
+        let bare: Block =
+            serde_json::from_str(r#"{"type":"tool_result","content":"oops"}"#).unwrap();
         assert_eq!(bare.result_text().as_deref(), Some("oops"));
 
-        let listed: Block =
-            serde_json::from_str(r#"{"type":"tool_result","content":[{"type":"text","text":"oops"}]}"#)
-                .unwrap();
+        let listed: Block = serde_json::from_str(
+            r#"{"type":"tool_result","content":[{"type":"text","text":"oops"}]}"#,
+        )
+        .unwrap();
         assert_eq!(listed.result_text().as_deref(), Some("oops"));
     }
 

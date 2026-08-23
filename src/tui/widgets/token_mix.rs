@@ -94,7 +94,11 @@ mod tests {
             cache_creation: 5,
             output: 50,
         });
-        let labels: Vec<&str> = mix.slices().iter().map(tui_piechart::PieSlice::label).collect();
+        let labels: Vec<&str> = mix
+            .slices()
+            .iter()
+            .map(tui_piechart::PieSlice::label)
+            .collect();
         assert_eq!(labels, ["cache read", "cache write", "input", "output"]);
     }
 
@@ -106,7 +110,11 @@ mod tests {
             cache_creation: 0,
             output: 5,
         });
-        let labels: Vec<&str> = mix.slices().iter().map(tui_piechart::PieSlice::label).collect();
+        let labels: Vec<&str> = mix
+            .slices()
+            .iter()
+            .map(tui_piechart::PieSlice::label)
+            .collect();
         assert_eq!(labels, ["input", "output"]);
     }
 

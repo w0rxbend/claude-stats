@@ -233,6 +233,9 @@ mod tests {
 
     #[test]
     fn an_unknown_model_still_gets_a_readable_name() {
-        assert_eq!(ModelCatalog::display_name_for("claude-zephyr-9"), "zephyr-9");
+        assert_eq!(
+            ModelCatalog::display_name_for("claude-zephyr-9"),
+            "zephyr-9"
+        );
     }
 }

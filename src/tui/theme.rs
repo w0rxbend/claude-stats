@@ -143,11 +143,7 @@ impl Theme {
         let t = scaled - index as f64;
         let (r1, g1, b1) = STOPS[index];
         let (r2, g2, b2) = STOPS[index + 1];
-        Color::Rgb(
-            lerp(r1, r2, t),
-            lerp(g1, g2, t),
-            lerp(b1, b2, t),
-        )
+        Color::Rgb(lerp(r1, r2, t), lerp(g1, g2, t), lerp(b1, b2, t))
     }
 }
 

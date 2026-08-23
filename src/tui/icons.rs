@@ -119,7 +119,13 @@ mod tests {
     fn no_glyph_comes_from_the_private_use_area() {
         // Private-use code points are where Nerd Font puts its icons, and a
         // terminal without that font renders them as empty boxes.
-        let all = [Icon::CONTEXT, Icon::COST, Icon::CACHE, Icon::COMPACT, Icon::BRANCH];
+        let all = [
+            Icon::CONTEXT,
+            Icon::COST,
+            Icon::CACHE,
+            Icon::COMPACT,
+            Icon::BRANCH,
+        ];
         for glyph in all {
             let code = glyph.chars().next().expect("one char") as u32;
             assert!(

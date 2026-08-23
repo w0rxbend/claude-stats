@@ -24,28 +24,41 @@ fn row(out: &mut String, label: &str, value: impl std::fmt::Display) {
 
 #[must_use]
 pub fn text(snapshot: &SessionSnapshot) -> String {
-    let fill = snapshot.context_fill();
-    let mut out = String::new();
+    let mut out = format!("\nsession {}\n", snapshot.session_id);
+    // One helper per section, because the four sections are what a reader
+    // actually scans for -- who am I looking at, how full is it, what did it
+    // cost, what did it do -- and a single long function hides that shape.
+    identity(&mut out, snapshot);
+    context(&mut out, snapshot);
+    spend(&mut out, snapshot);
+    activity(&mut out, snapshot);
+    out.push('\n');
+    out
+}
 
-    let _ = write!(out, "\nsession {}\n\n", snapshot.session_id);
-    row(&mut out, "model", snapshot.model_display_name());
-    row(&mut out, 
+fn identity(out: &mut String, snapshot: &SessionSnapshot) {
+    out.push('\n');
+    row(out, "model", snapshot.model_display_name());
+    row(
+        out,
         "project",
-        snapshot.project_dir.clone().unwrap_or_else(|| "-".to_owned()),
+        snapshot.project_dir.as_deref().unwrap_or("-"),
     );
-    row(&mut out, 
-        "branch",
-        snapshot.git_branch.clone().unwrap_or_else(|| "-".to_owned()),
-    );
-    row(&mut out, 
+    row(out, "branch", snapshot.git_branch.as_deref().unwrap_or("-"));
+    row(
+        out,
         "elapsed",
         snapshot
             .duration()
             .map_or_else(|| "-".to_owned(), format::duration),
     );
+}
 
+fn context(out: &mut String, snapshot: &SessionSnapshot) {
+    let fill = snapshot.context_fill();
     out.push('\n');
-    row(&mut out, 
+    row(
+        out,
         "context",
         format!(
             "{} / {}  ({})",
@@ -54,7 +67,8 @@ pub fn text(snapshot: &SessionSnapshot) -> String {
             format::percent_precise(fill.ratio())
         ),
     );
-    row(&mut out, 
+    row(
+        out,
         "until compaction",
         match snapshot.compaction_distance() {
             CompactionDistance::Imminent => "imminent".to_owned(),
@@ -62,48 +76,63 @@ pub fn text(snapshot: &SessionSnapshot) -> String {
             CompactionDistance::Unknown => "unknown".to_owned(),
         },
     );
-    row(&mut out, "compactions", snapshot.compactions.len().to_string());
+    row(out, "compactions", snapshot.compactions.len());
+}
 
+fn spend(out: &mut String, snapshot: &SessionSnapshot) {
     out.push('\n');
-    row(&mut out, 
+    row(
+        out,
         "cost",
         format!("{}  ({}/turn)", snapshot.cost(), snapshot.cost_per_turn()),
     );
-    row(&mut out, 
+    row(
+        out,
         "cache hit ratio",
         snapshot
             .cache_hit_ratio()
             .map_or_else(|| "-".to_owned(), format::percent_precise),
     );
-    row(&mut out, "input tokens", format::tokens(snapshot.totals.input));
-    row(&mut out, "cache reads", format::tokens(snapshot.totals.cache_read));
-    row(&mut out, "cache writes", format::tokens(snapshot.totals.cache_creation));
-    row(&mut out, "output tokens", format::tokens(snapshot.totals.output));
+    row(out, "input tokens", format::tokens(snapshot.totals.input));
+    row(
+        out,
+        "cache reads",
+        format::tokens(snapshot.totals.cache_read),
+    );
+    row(
+        out,
+        "cache writes",
+        format::tokens(snapshot.totals.cache_creation),
+    );
+    row(out, "output tokens", format::tokens(snapshot.totals.output));
+}
 
+fn activity(out: &mut String, snapshot: &SessionSnapshot) {
     out.push('\n');
-    row(&mut out, "turns", snapshot.turns.to_string());
-    row(&mut out, "tool calls", snapshot.tool_calls().to_string());
-    row(&mut out, "tool errors", snapshot.tool_errors.to_string());
-    row(&mut out, "files touched", snapshot.files_touched().to_string());
-    row(&mut out, 
+    row(out, "turns", snapshot.turns);
+    row(out, "tool calls", snapshot.tool_calls());
+    row(out, "tool errors", snapshot.tool_errors);
+    row(out, "files touched", snapshot.files_touched());
+    row(
+        out,
         "lines",
         format!("+{} -{}", snapshot.lines_added, snapshot.lines_removed),
     );
-    row(&mut out, "thinking blocks", snapshot.thinking_blocks.to_string());
-    row(&mut out, "sub-agents", snapshot.subagents.to_string());
-    row(&mut out, "skills", snapshot.skills.to_string());
+    row(out, "thinking blocks", snapshot.thinking_blocks);
+    row(out, "sub-agents", snapshot.subagents);
+    row(out, "skills", snapshot.skills);
 
-    if !snapshot.tool_counts.is_empty() {
-        out.push_str("\n  top tools\n");
-        let mut ranked: Vec<_> = snapshot.tool_counts.iter().collect();
-        ranked.sort_by_key(|(name, count)| (std::cmp::Reverse(**count), (*name).clone()));
-        for (name, count) in ranked.iter().take(8) {
-                let _ = writeln!(out, "    {name:<18}{count}");
-        }
+    if snapshot.tool_counts.is_empty() {
+        return;
     }
-
-    out.push('\n');
-    out
+    out.push_str("\n  top tools\n");
+    let mut ranked: Vec<_> = snapshot.tool_counts.iter().collect();
+    // Most-used first, then alphabetically, so a tie renders the same way on
+    // every run and the report can be diffed.
+    ranked.sort_by_key(|(name, count)| (std::cmp::Reverse(**count), (*name).clone()));
+    for (name, count) in ranked.iter().take(8) {
+        let _ = writeln!(out, "    {name:<18}{count}");
+    }
 }
 
 /// Renders the machine-readable report.

@@ -237,7 +237,9 @@ where
         }
     }
 
-    fn monitor_catalog_list(&self) -> anyhow::Result<Vec<crate::application::ports::TranscriptRef>> {
+    fn monitor_catalog_list(
+        &self,
+    ) -> anyhow::Result<Vec<crate::application::ports::TranscriptRef>> {
         self.monitor.catalog().list()
     }
 
@@ -309,7 +311,10 @@ where
             View::Log => " q quit   d dashboard   j/k scroll   g/G ends   ? help ",
             View::Sessions => " q quit   j/k move   Enter attach   d dashboard   ? help ",
         };
-        let error = self.monitor.last_error().map(|e| format!("  {} {e}", Icon::ERROR));
+        let error = self
+            .monitor
+            .last_error()
+            .map(|e| format!("  {} {e}", Icon::ERROR));
 
         frame.render_widget(
             Paragraph::new(Line::from(vec![
@@ -332,9 +337,7 @@ mod tests {
     use chrono::Utc;
 
     use super::*;
-    use crate::application::ports::{
-        ChangeSource, SessionSelector, TranscriptRef,
-    };
+    use crate::application::ports::{ChangeSource, SessionSelector, TranscriptRef};
     use crate::domain::session::SessionSnapshot;
 
     struct Catalog(Vec<TranscriptRef>);

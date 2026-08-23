@@ -105,7 +105,10 @@ mod tests {
 
     #[test]
     fn mcp_tools_are_classified_as_network_calls() {
-        assert_eq!(ToolKind::classify("mcp__github__list_prs"), ToolKind::Network);
+        assert_eq!(
+            ToolKind::classify("mcp__github__list_prs"),
+            ToolKind::Network
+        );
     }
 
     #[test]

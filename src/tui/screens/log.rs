@@ -9,8 +9,9 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Padding, Paragraph, Scrollbar, ScrollbarOrientation,
-    ScrollbarState};
+use ratatui::widgets::{
+    Block, BorderType, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+};
 
 use crate::domain::session::{LogEntry, LogLevel, SessionSnapshot};
 use crate::tui::format;

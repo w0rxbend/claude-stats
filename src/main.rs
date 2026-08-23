@@ -9,7 +9,6 @@ use std::fmt::Write as _;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-
 use claudetui::application::monitor::Monitor;
 use claudetui::application::ports::{
     SessionReader, SessionSelector, TranscriptCatalog, TranscriptRef,
@@ -76,7 +75,10 @@ fn sessions(catalog: &FileSystemCatalog, limit: usize) -> Result<()> {
         println!("no Claude Code sessions found under ~/.claude/projects");
         return Ok(());
     }
-    println!("{:<10}  {:<16}  {:>8}  PROJECT", "SESSION", "MODIFIED", "SIZE");
+    println!(
+        "{:<10}  {:<16}  {:>8}  PROJECT",
+        "SESSION", "MODIFIED", "SIZE"
+    );
     for session in all.iter().take(limit) {
         println!(
             "{:<10}  {:<16}  {:>7}K  {}",

@@ -111,13 +111,7 @@ mod tests {
 
     #[test]
     fn the_more_specific_selector_wins_over_the_broader_one() {
-        let cli = Cli::parse_from([
-            "claudetui",
-            "--session",
-            "abc",
-            "--project",
-            "/tmp",
-        ]);
+        let cli = Cli::parse_from(["claudetui", "--session", "abc", "--project", "/tmp"]);
         assert_eq!(
             cli.selection.selector(),
             SessionSelector::Id("abc".to_owned())

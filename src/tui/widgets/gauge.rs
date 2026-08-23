@@ -41,7 +41,8 @@ impl ContextGauge {
         if window == 0 {
             return 1.0;
         }
-        let threshold = window.saturating_sub(crate::domain::model::ModelCatalog::COMPACTION_BUFFER);
+        let threshold =
+            window.saturating_sub(crate::domain::model::ModelCatalog::COMPACTION_BUFFER);
         threshold as f64 / window as f64
     }
 }
@@ -121,7 +122,9 @@ mod tests {
     fn an_empty_window_draws_only_track() {
         let buf = render(ContextFill::new(0, 200_000), 10);
         assert!(
-            row(&buf).chars().all(|c| c == '\u{2591}' || c == '\u{2193}'),
+            row(&buf)
+                .chars()
+                .all(|c| c == '\u{2591}' || c == '\u{2193}'),
             "expected track and a threshold tick, got {:?}",
             row(&buf)
         );

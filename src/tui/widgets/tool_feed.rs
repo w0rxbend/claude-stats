@@ -152,7 +152,10 @@ mod tests {
     #[test]
     fn the_newest_call_is_on_the_first_line() {
         let rows = render(
-            vec![event("Read", "old.rs", false), event("Edit", "new.rs", false)],
+            vec![
+                event("Read", "old.rs", false),
+                event("Edit", "new.rs", false),
+            ],
             30,
             2,
         );

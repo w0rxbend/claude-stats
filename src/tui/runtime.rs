@@ -42,10 +42,7 @@ where
     outcome
 }
 
-fn event_loop<B, C, R, W>(
-    terminal: &mut ratatui::Terminal<B>,
-    mut app: App<C, R, W>,
-) -> Result<()>
+fn event_loop<B, C, R, W>(terminal: &mut ratatui::Terminal<B>, mut app: App<C, R, W>) -> Result<()>
 where
     B: ratatui::backend::Backend,
     B::Error: std::error::Error + Send + Sync + 'static,

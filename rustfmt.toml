@@ -1,0 +1,5 @@
+# Defaults, with the edition pinned so `cargo fmt` behaves the same whether or
+# not it is invoked through cargo. Nightly-only options are deliberately not
+# used here: CI runs stable, and a config stable rustfmt silently ignores would
+# make `cargo fmt --check` disagree with what a contributor's editor produces.
+edition = "2024"

@@ -162,8 +162,14 @@ mod tests {
             ContextFill::new(100_000, window).severity(),
             FillSeverity::Comfortable
         );
-        assert_eq!(ContextFill::new(600_000, window).severity(), FillSeverity::Warm);
-        assert_eq!(ContextFill::new(800_000, window).severity(), FillSeverity::Hot);
+        assert_eq!(
+            ContextFill::new(600_000, window).severity(),
+            FillSeverity::Warm
+        );
+        assert_eq!(
+            ContextFill::new(800_000, window).severity(),
+            FillSeverity::Hot
+        );
         assert_eq!(
             ContextFill::new(950_000, window).severity(),
             FillSeverity::Critical

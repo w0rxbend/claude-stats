@@ -204,7 +204,11 @@ where
         let Ok(Some(candidate)) = self.catalog.resolve(&self.selector) else {
             return false;
         };
-        if self.attached.as_ref().is_some_and(|a| a.path == candidate.path) {
+        if self
+            .attached
+            .as_ref()
+            .is_some_and(|a| a.path == candidate.path)
+        {
             return false;
         }
         self.change_source = Some(self.watchers.watch(&candidate.path));

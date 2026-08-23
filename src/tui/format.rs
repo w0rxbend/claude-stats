@@ -99,7 +99,10 @@ mod tests {
 
     #[test]
     fn a_path_is_truncated_from_the_left_so_the_file_name_survives() {
-        assert_eq!(fit("/very/long/path/money.rs", 12, true), "\u{2026}th/money.rs");
+        assert_eq!(
+            fit("/very/long/path/money.rs", 12, true),
+            "\u{2026}th/money.rs"
+        );
     }
 
     #[test]
