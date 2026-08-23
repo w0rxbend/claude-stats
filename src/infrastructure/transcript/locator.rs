@@ -28,15 +28,25 @@ impl FileSystemCatalog {
     /// listing 190 sessions to a few kilobytes of reads.
     const CWD_SCAN_LINES: usize = 8;
 
-    /// Points the catalogue at `~/.claude/projects`.
+    /// Points the catalogue at wherever Claude Code keeps its projects.
+    ///
+    /// That is `~/.claude/projects`, unless `CLAUDE_CONFIG_DIR` is set --
+    /// which relocates Claude Code's whole state directory, so a user who has
+    /// set it would otherwise be told they have no sessions at all.
     ///
     /// # Errors
     ///
-    /// Returns an error when the home directory cannot be determined, which on
-    /// a normal machine means something is badly wrong with the environment.
+    /// Returns an error when `CLAUDE_CONFIG_DIR` is unset and the home
+    /// directory cannot be determined, which on a normal machine means
+    /// something is badly wrong with the environment.
     pub fn from_home() -> Result<Self> {
-        let home = dirs::home_dir().context("cannot determine the home directory")?;
-        Ok(Self::rooted_at(home.join(".claude").join("projects")))
+        let config_dir = match std::env::var_os("CLAUDE_CONFIG_DIR") {
+            Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+            _ => dirs::home_dir()
+                .context("cannot determine the home directory")?
+                .join(".claude"),
+        };
+        Ok(Self::rooted_at(config_dir.join("projects")))
     }
 
     /// Points the catalogue at an arbitrary directory. Used by the tests.

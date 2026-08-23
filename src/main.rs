@@ -72,7 +72,10 @@ fn stats(catalog: &FileSystemCatalog, selector: &SessionSelector, as_json: bool)
 fn sessions(catalog: &FileSystemCatalog, limit: usize) -> Result<()> {
     let all = catalog.list()?;
     if all.is_empty() {
-        println!("no Claude Code sessions found under ~/.claude/projects");
+        println!(
+            "no Claude Code sessions found under ~/.claude/projects \
+             (set CLAUDE_CONFIG_DIR if Claude Code stores its state elsewhere)"
+        );
         return Ok(());
     }
     println!(
