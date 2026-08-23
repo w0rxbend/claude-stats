@@ -1,5 +1,10 @@
 # claudetui
 
+[![Release](https://img.shields.io/github/v/release/w0rxbend/claudetui-rs)](https://github.com/w0rxbend/claudetui-rs/releases/latest)
+[![CI](https://github.com/w0rxbend/claudetui-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/w0rxbend/claudetui-rs/actions/workflows/ci.yml)
+[![Licence](https://img.shields.io/github/license/w0rxbend/claudetui-rs)](LICENSE)
+[![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange?logo=rust&logoColor=white)](https://www.rust-lang.org)
+
 A live terminal dashboard for [Claude Code](https://claude.com/claude-code) sessions,
 written in Rust with [ratatui](https://ratatui.rs).
 

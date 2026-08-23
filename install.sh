@@ -175,13 +175,15 @@ main() {
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT INT TERM
 
+    # -fsL rather than -fsSL: curl's own "404" line adds nothing next to the
+    # message below, and two errors for one problem reads like two problems.
     step "downloading $archive"
-    curl -fsSL "$base/$archive" -o "$tmp/$archive" ||
+    curl -fsL "$base/$archive" -o "$tmp/$archive" ||
         die "no build published for $target at $version
 See https://github.com/$REPO/releases for what is available."
 
     step "verifying the checksum"
-    curl -fsSL "$base/SHA256SUMS" -o "$tmp/SHA256SUMS" ||
+    curl -fsL "$base/SHA256SUMS" -o "$tmp/SHA256SUMS" ||
         die "cannot download the checksum file for $version"
     verify_checksum "$tmp/$archive" "$tmp/SHA256SUMS"
 
