@@ -15,6 +15,7 @@ use ratatui::widgets::{Paragraph, Widget};
 
 use crate::application::monitor::{Monitor, Tick};
 use crate::application::ports::{ChangeSourceFactory, SessionReader, TranscriptCatalog};
+use crate::application::usage::UsageTracker;
 use crate::tui::icons::Icon;
 use crate::tui::screens;
 use crate::tui::theme::Theme;
@@ -97,6 +98,9 @@ pub struct App<C, R, W> {
     quit: bool,
     /// A transient message for the footer: a failed attach, a manual refresh.
     notice: Option<String>,
+    /// Account-wide usage, when the dashboard was given something to measure
+    /// it with. `None` in tests that only care about session behaviour.
+    usage: Option<UsageTracker>,
 }
 
 impl<C, R, W> App<C, R, W>
@@ -117,7 +121,19 @@ where
             selected: 0,
             quit: false,
             notice: None,
+            usage: None,
         }
+    }
+
+    /// Adds account-wide usage tracking to the dashboard.
+    ///
+    /// Separate from [`App::new`] because the dashboard is perfectly usable
+    /// without it -- and because a test that is checking key handling should
+    /// not have to supply a scanner for every transcript on the machine.
+    #[must_use]
+    pub fn tracking_usage(mut self, tracker: UsageTracker) -> Self {
+        self.usage = Some(tracker);
+        self
     }
 
     /// Whether the event loop should stop.
@@ -139,6 +155,9 @@ where
     /// transcript does is a spinner that looks frozen during a long tool call.
     pub fn tick(&mut self) {
         self.phase = self.phase.wrapping_add(1);
+        if let Some(usage) = &mut self.usage {
+            usage.tick();
+        }
         let outcome = self.monitor.tick();
         if outcome == Tick::Attached {
             // A different session means the old scroll position points at
@@ -182,7 +201,12 @@ where
                 View::Dashboard => {}
             },
             Action::Confirm => self.attach_selected(),
-            Action::Refresh => self.refresh_session_list(),
+            Action::Refresh => {
+                self.refresh_session_list();
+                if let Some(usage) = &mut self.usage {
+                    usage.scan();
+                }
+            }
         }
     }
 
@@ -274,7 +298,11 @@ where
                 screens::log::draw(frame, body, snapshot, self.log_offset);
             }
             (_, Some(snapshot)) => {
-                screens::dashboard::draw(frame, body, snapshot, self.phase);
+                let usage = self
+                    .usage
+                    .as_ref()
+                    .map(|tracker| (tracker.usage(), tracker.has_measured()));
+                screens::dashboard::draw(frame, body, snapshot, self.phase, usage);
             }
             (_, None) => screens::help::draw_searching(frame, body, self.phase),
         }

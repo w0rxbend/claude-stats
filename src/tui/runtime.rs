@@ -14,6 +14,7 @@ use ratatui::crossterm::event::{self, Event};
 
 use crate::application::monitor::Monitor;
 use crate::application::ports::{ChangeSourceFactory, SessionReader, TranscriptCatalog};
+use crate::application::usage::UsageTracker;
 use crate::tui::app::{Action, App};
 
 /// How long to wait for input before drawing another frame.
@@ -29,7 +30,7 @@ const FRAME_BUDGET: Duration = Duration::from_millis(125);
 /// # Errors
 ///
 /// Returns an error if the terminal cannot be set up or drawn to.
-pub fn run<C, R, W>(monitor: Monitor<C, R, W>) -> Result<()>
+pub fn run<C, R, W>(monitor: Monitor<C, R, W>, usage: UsageTracker) -> Result<()>
 where
     C: TranscriptCatalog,
     R: SessionReader,
@@ -37,7 +38,7 @@ where
 {
     install_panic_hook();
     let mut terminal = ratatui::try_init()?;
-    let outcome = event_loop(&mut terminal, App::new(monitor));
+    let outcome = event_loop(&mut terminal, App::new(monitor).tracking_usage(usage));
     ratatui::restore();
     outcome
 }

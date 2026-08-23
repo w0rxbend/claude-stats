@@ -18,3 +18,4 @@ pub mod spinner;
 pub mod stat_tile;
 pub mod token_mix;
 pub mod tool_feed;
+pub mod usage_windows;

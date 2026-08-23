@@ -19,6 +19,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Padding, Paragraph, Wrap};
 
 use crate::domain::context::{CompactionDistance, FillSeverity};
+use crate::domain::limits::AccountUsage;
 use crate::domain::session::{SessionPhase, SessionSnapshot};
 use crate::tui::format;
 use crate::tui::icons::Icon;
@@ -31,6 +32,18 @@ use crate::tui::widgets::spinner::{Spinner, SpinnerStyle};
 use crate::tui::widgets::stat_tile::StatTile;
 use crate::tui::widgets::token_mix::TokenMix;
 use crate::tui::widgets::tool_feed::ToolFeed;
+use crate::tui::widgets::usage_windows::UsageWindows;
+
+/// Rows the account-usage panel takes: a border, two windows of two lines
+/// each, and a row in hand for the rate-limit banner when there is one.
+const USAGE_ROWS: u16 = 7;
+
+/// The height below which the account-usage panel is dropped.
+///
+/// Generous, because this panel is the first thing *added* as a terminal grows
+/// rather than the last: it is only worth the rows once the detail columns
+/// already fit.
+const MIN_HEIGHT_FOR_USAGE: u16 = MIN_HEIGHT_FOR_DETAIL + USAGE_ROWS;
 
 /// The height below which the detail columns are dropped entirely.
 ///
@@ -52,7 +65,13 @@ const BANNER_ROWS: u16 = 4;
 const MIN_HEIGHT_FOR_BANNER: u16 = 11;
 
 /// Draws the dashboard for `snapshot` into `area`.
-pub fn draw(frame: &mut Frame<'_>, area: Rect, snapshot: &SessionSnapshot, phase: u64) {
+pub fn draw(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    snapshot: &SessionSnapshot,
+    phase: u64,
+    usage: Option<(&AccountUsage, bool)>,
+) {
     let [header, tiles, gauge, rest] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(4),
@@ -65,8 +84,29 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, snapshot: &SessionSnapshot, phase
     draw_tiles(frame, tiles, snapshot);
     draw_context_panel(frame, gauge, snapshot);
 
-    if rest.height >= MIN_HEIGHT_FOR_DETAIL {
-        draw_detail(frame, rest, snapshot, phase);
+    // The usage panel sits directly under the context gauge, because a limit
+    // that has already been hit changes what you do next just as much as a
+    // context window that is nearly full.
+    //
+    // Which of the two lower panels gets the space depends on how much there
+    // is. Tall enough for both, and both are drawn. Enough for only one, the
+    // detail columns win, because they are about the session actually on
+    // screen. Too short for those but not for this, and the usage panel takes
+    // rows that would otherwise sit empty.
+    match usage {
+        Some((usage, measured)) if rest.height >= MIN_HEIGHT_FOR_USAGE => {
+            let [panel, detail] =
+                Layout::vertical([Constraint::Length(USAGE_ROWS), Constraint::Min(0)]).areas(rest);
+            frame.render_widget(UsageWindows::new(usage, measured), panel);
+            draw_detail(frame, detail, snapshot, phase);
+        }
+        _ if rest.height >= MIN_HEIGHT_FOR_DETAIL => draw_detail(frame, rest, snapshot, phase),
+        Some((usage, measured)) if rest.height >= USAGE_ROWS => {
+            let [panel, _] =
+                Layout::vertical([Constraint::Length(USAGE_ROWS), Constraint::Min(0)]).areas(rest);
+            frame.render_widget(UsageWindows::new(usage, measured), panel);
+        }
+        _ => {}
     }
 }
 
@@ -461,10 +501,18 @@ mod tests {
     }
 
     fn render_at(width: u16, height: u16) -> String {
+        render_with_usage(width, height, None)
+    }
+
+    fn render_with_usage(
+        width: u16,
+        height: u16,
+        usage: Option<&crate::domain::limits::AccountUsage>,
+    ) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("test terminal");
         let snapshot = sample_snapshot();
         terminal
-            .draw(|frame| draw(frame, frame.area(), &snapshot, 0))
+            .draw(|frame| draw(frame, frame.area(), &snapshot, 0, usage.map(|u| (u, true))))
             .expect("draw");
         let buffer = terminal.backend().buffer().clone();
         (0..height)
@@ -499,6 +547,42 @@ mod tests {
         let screen = render_at(140, 12);
         assert!(screen.contains("CONTEXT"));
         assert!(!screen.contains("live tool activity"));
+    }
+
+    #[test]
+    fn a_tall_terminal_shows_the_account_panel_alongside_the_detail_columns() {
+        let usage = crate::domain::limits::AccountUsage::empty(chrono::Utc::now());
+        let screen = render_with_usage(140, 40, Some(&usage));
+
+        assert!(screen.contains("account usage"));
+        assert!(screen.contains("live tool activity"), "and the detail too");
+    }
+
+    #[test]
+    fn when_only_one_lower_panel_fits_the_session_detail_wins() {
+        let usage = crate::domain::limits::AccountUsage::empty(chrono::Utc::now());
+        // Room for the detail columns but not for both.
+        let screen = render_with_usage(140, 27, Some(&usage));
+
+        assert!(screen.contains("live tool activity"));
+        assert!(!screen.contains("account usage"));
+    }
+
+    #[test]
+    fn a_terminal_too_short_for_the_detail_columns_shows_the_account_panel() {
+        // These rows would otherwise be blank: the detail columns need more
+        // height than there is, and something true is better than nothing.
+        let usage = crate::domain::limits::AccountUsage::empty(chrono::Utc::now());
+        let screen = render_with_usage(140, 20, Some(&usage));
+
+        assert!(screen.contains("account usage"));
+        assert!(!screen.contains("live tool activity"));
+    }
+
+    #[test]
+    fn the_account_panel_is_absent_when_nothing_is_tracking_usage() {
+        let screen = render_at(140, 40);
+        assert!(!screen.contains("account usage"));
     }
 
     #[test]

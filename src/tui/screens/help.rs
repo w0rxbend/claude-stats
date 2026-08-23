@@ -23,7 +23,7 @@ pub const KEYS: &[(&str, &str)] = &[
     ("Enter", "attach to the selected session"),
     ("j / k", "move down / up"),
     ("g / G", "jump to the oldest / newest entry"),
-    ("r", "re-read the transcript now"),
+    ("r", "re-read the transcript and re-measure usage"),
     ("?", "this help"),
 ];
 
