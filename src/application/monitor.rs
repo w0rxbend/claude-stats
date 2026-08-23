@@ -106,11 +106,17 @@ where
         self.attached.as_ref()
     }
 
-    /// The catalogue this monitor searches, so a caller can list every
-    /// session without being handed a second, possibly divergent, catalogue.
-    #[must_use]
-    pub const fn catalog(&self) -> &C {
-        &self.catalog
+    /// Every session the catalogue can see, newest first.
+    ///
+    /// Offered as a use case rather than by handing the catalogue port out:
+    /// the session picker wants a list of sessions, not the ability to reach
+    /// past the monitor and talk to the store directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot be listed.
+    pub fn list_sessions(&self) -> Result<Vec<TranscriptRef>> {
+        self.catalog.list()
     }
 
     /// The most recent read failure, if any.
@@ -152,10 +158,7 @@ where
     ///
     /// Returns an error when the chosen transcript cannot be read.
     pub fn attach_to(&mut self, transcript: TranscriptRef) -> Result<()> {
-        self.change_source = Some(self.watchers.watch(&transcript.path));
-        self.attached = Some(transcript);
-        self.last_rescan = Some(Instant::now());
-        self.reload();
+        self.attach(transcript);
         match self.last_error.take() {
             Some(message) => Err(anyhow::anyhow!(message)),
             None => Ok(()),
@@ -173,10 +176,7 @@ where
 
         match self.catalog.resolve(&self.selector) {
             Ok(Some(transcript)) => {
-                self.change_source = Some(self.watchers.watch(&transcript.path));
-                self.attached = Some(transcript);
-                self.last_rescan = Some(Instant::now());
-                self.reload();
+                self.attach(transcript);
                 Tick::Attached
             }
             Ok(None) => Tick::Searching,
@@ -211,9 +211,7 @@ where
         {
             return false;
         }
-        self.change_source = Some(self.watchers.watch(&candidate.path));
-        self.attached = Some(candidate);
-        self.reload();
+        self.attach(candidate);
         true
     }
 
@@ -224,6 +222,17 @@ where
     /// is briefly wrong -- and blanking the dashboard for a moment would be
     /// worse than showing numbers that are one second stale next to an error
     /// message saying so.
+    /// Points the monitor at `transcript`: watch it, remember it, read it.
+    ///
+    /// The one place the attach sequence is written down. It used to appear in
+    /// all three callers, and the copies had already drifted apart.
+    fn attach(&mut self, transcript: TranscriptRef) {
+        self.change_source = Some(self.watchers.watch(&transcript.path));
+        self.attached = Some(transcript);
+        self.last_rescan = Some(Instant::now());
+        self.reload();
+    }
+
     fn reload(&mut self) {
         let Some(transcript) = &self.attached else {
             return;
@@ -280,14 +289,19 @@ mod tests {
         }
     }
 
-    /// A reader that counts how often it was asked to read.
+    /// A reader that counts how often it was asked to read, and can be told
+    /// to start failing so the recovery behaviour can be exercised.
     struct CountingReader {
         reads: Rc<Cell<u32>>,
+        fails: Rc<Cell<bool>>,
     }
 
     impl SessionReader for CountingReader {
         fn read(&self, transcript: &TranscriptRef) -> Result<SessionSnapshot> {
             self.reads.set(self.reads.get() + 1);
+            if self.fails.get() {
+                anyhow::bail!("transcript unreadable");
+            }
             Ok(SessionSnapshot::empty(
                 transcript.path.clone(),
                 transcript.session_id.clone(),
@@ -327,16 +341,61 @@ mod tests {
         reads: &Rc<Cell<u32>>,
         pending: &Rc<Cell<u32>>,
     ) -> Monitor<FakeCatalog, CountingReader, ScriptedFactory> {
+        monitor_with_failure(paths, reads, pending, &Rc::new(Cell::new(false)))
+    }
+
+    fn monitor_with_failure(
+        paths: &[&str],
+        reads: &Rc<Cell<u32>>,
+        pending: &Rc<Cell<u32>>,
+        fails: &Rc<Cell<bool>>,
+    ) -> Monitor<FakeCatalog, CountingReader, ScriptedFactory> {
         Monitor::new(
             FakeCatalog::with(paths),
             CountingReader {
                 reads: Rc::clone(reads),
+                fails: Rc::clone(fails),
             },
             ScriptedFactory {
                 pending: Rc::clone(pending),
             },
             SessionSelector::Active,
         )
+    }
+
+    #[test]
+    fn a_failed_re_read_keeps_the_last_good_snapshot_and_says_what_went_wrong() {
+        // The difference between a dashboard that survives a log rotation and
+        // one that blanks itself at the worst possible moment.
+        let (reads, pending, fails) = (
+            Rc::new(Cell::new(0)),
+            Rc::new(Cell::new(0)),
+            Rc::new(Cell::new(false)),
+        );
+        let mut m = monitor_with_failure(&["/a.jsonl"], &reads, &pending, &fails);
+
+        assert_eq!(m.tick(), Tick::Attached);
+        assert!(m.snapshot().is_some());
+
+        fails.set(true);
+        pending.set(1);
+        assert_eq!(m.tick(), Tick::Refreshed);
+
+        assert!(m.snapshot().is_some(), "the stale numbers are kept");
+        assert_eq!(m.last_error(), Some("transcript unreadable"));
+    }
+
+    #[test]
+    fn attaching_to_an_unreadable_transcript_reports_the_failure() {
+        let (reads, pending, fails) = (
+            Rc::new(Cell::new(0)),
+            Rc::new(Cell::new(0)),
+            Rc::new(Cell::new(true)),
+        );
+        let mut m = monitor_with_failure(&["/a.jsonl"], &reads, &pending, &fails);
+        let chosen = m.list_sessions().expect("a listing").remove(0);
+
+        assert!(m.attach_to(chosen).is_err());
     }
 
     #[test]
@@ -406,6 +465,7 @@ mod tests {
             FakeCatalog::with(&["/a.jsonl"]),
             CountingReader {
                 reads: Rc::clone(&reads),
+                fails: Rc::new(Cell::new(false)),
             },
             ScriptedFactory {
                 pending: Rc::clone(&pending),

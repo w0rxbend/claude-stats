@@ -134,10 +134,10 @@ where
 
     /// Advances animation and lets the monitor do its work.
     ///
-    /// Returns whether anything changed that is worth a redraw. Animation
-    /// always counts, because a spinner that only moves when the transcript
-    /// does is a spinner that looks frozen during a long tool call.
-    pub fn tick(&mut self) -> bool {
+    /// Every tick is worth a redraw, which is why nothing is reported back:
+    /// animation counts on its own, because a spinner that only moves when the
+    /// transcript does is a spinner that looks frozen during a long tool call.
+    pub fn tick(&mut self) {
         self.phase = self.phase.wrapping_add(1);
         let outcome = self.monitor.tick();
         if outcome == Tick::Attached {
@@ -145,7 +145,6 @@ where
             // entries that no longer exist.
             self.log_offset = 0;
         }
-        true
     }
 
     /// Applies an action.
@@ -228,19 +227,13 @@ where
     }
 
     fn refresh_session_list(&mut self) {
-        match self.monitor_catalog_list() {
+        match self.monitor.list_sessions() {
             Ok(sessions) => {
                 self.selected = self.selected.min(sessions.len().saturating_sub(1));
                 self.sessions = sessions;
             }
             Err(error) => self.notice = Some(error.to_string()),
         }
-    }
-
-    fn monitor_catalog_list(
-        &self,
-    ) -> anyhow::Result<Vec<crate::application::ports::TranscriptRef>> {
-        self.monitor.catalog().list()
     }
 
     fn attach_selected(&mut self) {
