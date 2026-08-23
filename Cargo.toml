@@ -1,6 +1,6 @@
 [package]
 name = "claudetui"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 description = "A colourful terminal dashboard for Claude Code sessions: context fill, cost, cache ratio, compaction distance and live tool activity, parsed straight from the session transcript."
