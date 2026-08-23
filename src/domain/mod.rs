@@ -8,6 +8,7 @@
 
 pub mod activity;
 pub mod context;
+pub mod limits;
 pub mod model;
 pub mod money;
 pub mod session;
