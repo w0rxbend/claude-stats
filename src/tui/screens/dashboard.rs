@@ -41,6 +41,16 @@ const MIN_HEIGHT_FOR_DETAIL: u16 = 18;
 /// The width below which the layout collapses to a single column.
 const MIN_WIDTH_FOR_COLUMNS: u16 = 90;
 
+/// Rows given to the oversized context percentage.
+///
+/// Four, which is `PixelSize::HalfHeight`, not the eight a full-size banner
+/// wants. At eight it dominates the panel it shares with the chart, and the
+/// chart is the element carrying information the tiles do not already show.
+const BANNER_ROWS: u16 = 4;
+
+/// The panel height below which the banner is dropped in favour of the chart.
+const MIN_HEIGHT_FOR_BANNER: u16 = 11;
+
 /// Draws the dashboard for `snapshot` into `area`.
 pub fn draw(frame: &mut Frame<'_>, area: Rect, snapshot: &SessionSnapshot, phase: u64) {
     let [header, tiles, gauge, rest] = Layout::vertical([
@@ -270,9 +280,17 @@ fn draw_trend(frame: &mut Frame<'_>, area: Rect, snapshot: &SessionSnapshot) {
         return;
     }
 
+    // The banner is the first thing to go when the panel is short: it is the
+    // only element here that repeats a number shown elsewhere, so it costs
+    // nothing to drop and the chart gets its rows back.
+    let banner_rows = if inner.height >= MIN_HEIGHT_FOR_BANNER {
+        BANNER_ROWS
+    } else {
+        0
+    };
     let [banner, spark, meters] = Layout::vertical([
-        Constraint::Min(0),
-        Constraint::Length(1),
+        Constraint::Length(banner_rows),
+        Constraint::Min(1),
         Constraint::Length(3),
     ])
     .areas(inner);

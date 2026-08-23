@@ -39,7 +39,10 @@ pub fn meter_line(
         .collect();
 
     Line::from(vec![
-        Span::styled(format!("{label:<9}"), Theme::label()),
+        // Eleven columns, because the longest label in use is "efficiency"
+        // at ten and a bar that starts flush against its label reads as one
+        // run-on word.
+        Span::styled(format!("{label:<11}"), Theme::label()),
         Span::styled(bar, Style::default().fg(accent)),
         Span::raw(" "),
         Span::styled(
@@ -52,6 +55,16 @@ pub fn meter_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_label_column_is_wide_enough_for_the_longest_label_plus_a_gap() {
+        let line = meter_line("efficiency", 1.0, "100%".to_owned(), Theme::MINT, 4);
+        let label = line.spans[0].content.to_string();
+        assert!(
+            label.ends_with(' '),
+            "{label:?} must not run into the bar"
+        );
+    }
 
     fn bar_of(line: &Line<'_>) -> String {
         line.spans[1].content.to_string()
