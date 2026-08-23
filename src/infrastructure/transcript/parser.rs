@@ -323,10 +323,10 @@ impl ParseState {
         *self.snapshot.kind_counts.entry(kind).or_insert(0) += 1;
 
         let subject = match kind {
-            ToolKind::Agent => self.register_agent(record, block, &id),
-            ToolKind::Skill => self.register_skill(record, block, &id),
+            ToolKind::Agent => self.register_agent(block, &id),
+            ToolKind::Skill => self.register_skill(block, &id),
             ToolKind::Write => self.register_file_edit(block),
-            ToolKind::Read => Self::register_file_read(&mut self.snapshot, block),
+            ToolKind::Read => self.register_file_read(block),
             _ => Self::describe_tool(block),
         };
 
@@ -357,7 +357,7 @@ impl ParseState {
         );
     }
 
-    fn register_agent(&mut self, _record: &Record, block: &Block, id: &str) -> String {
+    fn register_agent(&mut self, block: &Block, id: &str) -> String {
         let label = block
             .input_str("description")
             .or_else(|| block.input_str("subagent_type"))
@@ -372,7 +372,7 @@ impl ParseState {
         label
     }
 
-    fn register_skill(&mut self, _record: &Record, block: &Block, id: &str) -> String {
+    fn register_skill(&mut self, block: &Block, id: &str) -> String {
         let name = block.input_str("skill").unwrap_or("skill").to_owned();
         self.snapshot.skills += 1;
         self.snapshot.turn.active_skill = Some(name.clone());
@@ -417,7 +417,7 @@ impl ParseState {
         }
     }
 
-    fn register_file_read(snapshot: &mut SessionSnapshot, block: &Block) -> String {
+    fn register_file_read(&mut self, block: &Block) -> String {
         let Some(path) = block
             .input_str("file_path")
             .or_else(|| block.input_str("path"))
@@ -425,8 +425,8 @@ impl ParseState {
             return Self::describe_tool(block);
         };
         let file = base_name(path);
-        bump(&mut snapshot.files_read, &file);
-        bump(&mut snapshot.turn.files_read, &file);
+        bump(&mut self.snapshot.files_read, &file);
+        bump(&mut self.snapshot.turn.files_read, &file);
         file
     }
 
