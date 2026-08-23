@@ -24,6 +24,13 @@ Claude is calling right now.
 │ ██████████████████████████████████████████████████████████▌░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░↓░░░░ │
 │ ◇ used 714.2k   ◴ free 285.8k   ↯ until compaction 252.8k   ↗ growth/turn 61.4k                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭ account usage ───────────────────────────────────────────────────────────────────────────────────╮
+│ ⚠ session limit reached  │ resets in 38m                                                         │
+│ ◷ 5h      ████████████▎░ 8.42M                                                                   │
+│            $12.40  │ 3 sessions  │ 88% vs peak                                                   │
+│ ◷ 7d      ███████▏░░░░░░ 41.20M                                                                  │
+│            $61.80  │ 28 sessions  │ 51% vs peak                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭ output per response ───────────────────────╮╭ live tool activity ────────────────────────────────╮
 │              ▄█▀▀█▄  ▄█▀▀   ▄▄   ▄▄        ││ ⠸ edit webhook_handler.rs                          │
 │                ▄▄█▀ ██▄▄▄   ▀▀ ▄█▀         ││ ▶ bash cargo test --lib                            │
@@ -166,6 +173,27 @@ claude-stats stats --json     # raw numbers, for jq
 claude-stats sessions         # every session on this machine, newest first
 claude-stats models           # context windows and prices per million tokens
 ```
+
+### Account usage and rate limits
+
+The dashboard also tracks what you have spent **across every session on the
+machine**, not just the one it is following, because that is the shape of
+Claude Code's limits: a five-hour "session limit" and a seven-day "weekly
+limit" are consumed by everything you run, in every terminal and every project.
+
+The `account usage` panel shows, for the last five hours and the last seven
+days: tokens, cost, and how many sessions contributed. The same figures appear
+under `stats`, and in `stats --json` beneath an `account` key.
+
+**It does not show a percentage of your limit, because that number cannot be
+known here.** Limits are enforced on Anthropic's side and the live figure is
+never written to disk -- `/usage` inside Claude Code fetches it from the API.
+Rather than draw a convincing gauge from a guessed ceiling, the bar is drawn
+against your *own* busiest comparable window and labelled `vs peak`.
+
+One thing is exact. When the API actually refuses a request it records when the
+limit lifts, so if you are rate limited right now the panel says so and counts
+down to the reset using the server's own answer.
 
 `stats --json` emits unabbreviated token counts and dollar amounts, so it can be summed
 across sessions:
