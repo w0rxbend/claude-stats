@@ -55,6 +55,25 @@ pub fn duration(elapsed: Duration) -> String {
     }
 }
 
+/// Shortens a session id to the eight characters the listings have room for.
+///
+/// Cuts on a character boundary rather than a byte one. A session id is not a
+/// validated UUID -- it is the file stem of any `*.jsonl` under the projects
+/// directory, read lossily -- so a byte cut can land mid-character and panic,
+/// taking the running dashboard down mid-render.
+///
+/// Not [`fit`], which would spend one of the eight columns on an ellipsis.
+#[must_use]
+pub fn session_id(id: &str) -> &str {
+    match id.char_indices().nth(SESSION_ID_CHARS) {
+        Some((byte, _)) => &id[..byte],
+        None => id,
+    }
+}
+
+/// How much of a session id the listings show.
+const SESSION_ID_CHARS: usize = 8;
+
 /// Shortens `text` to `width` characters, ending in an ellipsis if it was cut.
 ///
 /// Truncates from the *left* when `keep_end` is set, which is what paths want:
@@ -79,6 +98,19 @@ pub fn fit(text: &str, width: usize, keep_end: bool) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_session_id_is_cut_on_a_character_boundary_not_a_byte_one() {
+        assert_eq!(session_id("0f3a9c21-1b2c-4d5e"), "0f3a9c21");
+        assert_eq!(
+            session_id("short"),
+            "short",
+            "shorter than eight is left alone"
+        );
+        // A transcript file name is not a validated UUID. Cutting this by
+        // bytes would land mid-character and panic.
+        assert_eq!(session_id("sesión-de-prueba").chars().count(), 8);
+    }
     use super::*;
 
     #[test]

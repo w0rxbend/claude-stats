@@ -19,7 +19,7 @@ use claudetui::infrastructure::transcript::locator::FileSystemCatalog;
 use claudetui::infrastructure::transcript::parser::TranscriptParser;
 use claudetui::infrastructure::transcript::watcher::FileSystemWatchFactory;
 use claudetui::report;
-use claudetui::tui::runtime;
+use claudetui::tui::{format, runtime};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -82,7 +82,7 @@ fn sessions(catalog: &FileSystemCatalog, limit: usize) -> Result<()> {
     for session in all.iter().take(limit) {
         println!(
             "{:<10}  {:<16}  {:>7}K  {}",
-            &session.session_id[..8.min(session.session_id.len())],
+            format::session_id(&session.session_id),
             session.modified_at.format("%Y-%m-%d %H:%M"),
             session.size_bytes / 1_024,
             session.project_dir,

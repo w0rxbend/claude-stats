@@ -43,10 +43,7 @@ pub fn draw(
             ListItem::new(Line::from(vec![
                 Span::styled(format!("{marker} "), Style::default().fg(colour)),
                 Span::styled(
-                    format!(
-                        "{:<9}",
-                        &session.session_id[..8.min(session.session_id.len())]
-                    ),
+                    format!("{:<9}", format::session_id(&session.session_id)),
                     Style::default().fg(Theme::CYAN),
                 ),
                 Span::styled(
