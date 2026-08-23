@@ -10,6 +10,7 @@ use std::fmt::Write as _;
 use serde_json::json;
 
 use crate::domain::context::CompactionDistance;
+use crate::domain::limits::{AccountUsage, WindowUsage};
 use crate::domain::session::SessionSnapshot;
 use crate::tui::format;
 
@@ -23,7 +24,7 @@ fn row(out: &mut String, label: &str, value: impl std::fmt::Display) {
 }
 
 #[must_use]
-pub fn text(snapshot: &SessionSnapshot) -> String {
+pub fn text(snapshot: &SessionSnapshot, usage: Option<&AccountUsage>) -> String {
     let mut out = format!("\nsession {}\n", snapshot.session_id);
     // One helper per section, because the four sections are what a reader
     // actually scans for -- who am I looking at, how full is it, what did it
@@ -32,6 +33,9 @@ pub fn text(snapshot: &SessionSnapshot) -> String {
     context(&mut out, snapshot);
     spend(&mut out, snapshot);
     activity(&mut out, snapshot);
+    if let Some(usage) = usage {
+        account(&mut out, usage);
+    }
     out.push('\n');
     out
 }
@@ -107,6 +111,38 @@ fn spend(out: &mut String, snapshot: &SessionSnapshot) {
     row(out, "output tokens", format::tokens(snapshot.totals.output));
 }
 
+/// The account-wide windows, which are about every session rather than this
+/// one. Printed only when a reading was taken, so `stats` on a machine where
+/// scanning failed stays quiet rather than printing zeroes.
+fn account(out: &mut String, usage: &AccountUsage) {
+    out.push('\n');
+    for window in [&usage.session, &usage.week] {
+        row(
+            out,
+            &format!("last {}", window.kind.span_label()),
+            format!(
+                "{} tokens  {}  ({} session{})",
+                format::tokens(window.tokens.total()),
+                window.cost,
+                window.sessions,
+                if window.sessions == 1 { "" } else { "s" }
+            ),
+        );
+    }
+    if let Some(limit) = usage.active_limit() {
+        row(
+            out,
+            "rate limited",
+            format!(
+                "yes, resets in {}",
+                limit
+                    .time_until_reset(usage.measured_at)
+                    .map_or_else(|| "any moment".to_owned(), format::duration)
+            ),
+        );
+    }
+}
+
 fn activity(out: &mut String, snapshot: &SessionSnapshot) {
     out.push('\n');
     row(out, "turns", snapshot.turns);
@@ -141,7 +177,7 @@ fn activity(out: &mut String, snapshot: &SessionSnapshot) {
 /// dashboard shows: anything consuming this will want to do its own
 /// arithmetic, and `953.4k` is not a number.
 #[must_use]
-pub fn json(snapshot: &SessionSnapshot) -> String {
+pub fn json(snapshot: &SessionSnapshot, usage: Option<&AccountUsage>) -> String {
     let fill = snapshot.context_fill();
     let value = json!({
         "session_id": snapshot.session_id,
@@ -181,7 +217,31 @@ pub fn json(snapshot: &SessionSnapshot) -> String {
         "subagents": snapshot.subagents,
         "skills": snapshot.skills,
     });
+    let mut value = value;
+    if let Some(usage) = usage {
+        value["account"] = json!({
+            "measured_at": usage.measured_at,
+            "last_5h": window_json(&usage.session),
+            "last_7d": window_json(&usage.week),
+            "rate_limited_until": usage.active_limit().map(|l| l.resets_at),
+            "limit_periods": usage.limit_events.len(),
+        });
+    }
     serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_owned())
+}
+
+/// One rolling window, as raw numbers.
+fn window_json(window: &WindowUsage) -> serde_json::Value {
+    json!({
+        "since": window.since,
+        "tokens": window.tokens.total(),
+        "cost_usd": window.cost.dollars(),
+        "sessions": window.sessions,
+        // Named for what it is. There is deliberately no "share of limit"
+        // here: that number is not knowable from a transcript.
+        "peak_comparable_window_tokens": window.peak,
+        "share_of_peak": window.share_of_peak(),
+    })
 }
 
 #[cfg(test)]
@@ -198,23 +258,75 @@ mod tests {
 
     #[test]
     fn the_text_report_names_the_session_and_the_model() {
-        let out = text(&snapshot());
+        let out = text(&snapshot(), None);
         assert!(out.contains("abc123"));
         assert!(out.contains("Opus 5"));
     }
 
     #[test]
     fn the_json_report_carries_raw_numbers_not_abbreviations() {
-        let out = json(&snapshot());
+        let out = json(&snapshot(), None);
         let parsed: serde_json::Value = serde_json::from_str(&out).expect("valid json");
         assert_eq!(parsed["tokens"]["output"], 1_000);
         assert_eq!(parsed["turns"], 3);
     }
 
+    fn account_usage() -> AccountUsage {
+        use crate::domain::limits::{SessionContribution, UsagePoint};
+        use crate::domain::money::Usd;
+        use crate::domain::tokens::TokenUsage;
+
+        let now = chrono::Utc::now();
+        AccountUsage::measure(
+            now,
+            &[SessionContribution {
+                session_id: "a".to_owned(),
+                points: vec![UsagePoint {
+                    at: now,
+                    tokens: TokenUsage {
+                        input: 250_000,
+                        ..TokenUsage::ZERO
+                    },
+                    cost: Usd::new(7.5),
+                }],
+            }],
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn the_report_carries_the_account_windows_when_they_were_measured() {
+        let usage = account_usage();
+        let out = text(&snapshot(), Some(&usage));
+
+        assert!(out.contains("last 5h"));
+        assert!(out.contains("last 7d"));
+        assert!(out.contains("250.0k tokens"));
+    }
+
+    #[test]
+    fn without_a_reading_the_report_says_nothing_about_the_account() {
+        let out = text(&snapshot(), None);
+        assert!(!out.contains("last 5h"), "no zeroes invented");
+    }
+
+    #[test]
+    fn the_json_account_block_never_claims_a_share_of_any_limit() {
+        let usage = account_usage();
+        let out = json(&snapshot(), Some(&usage));
+        let parsed: serde_json::Value = serde_json::from_str(&out).expect("valid json");
+
+        assert_eq!(parsed["account"]["last_5h"]["tokens"], 250_000);
+        assert!(parsed["account"]["rate_limited_until"].is_null());
+        // The only ceiling named anywhere is the user's own peak window.
+        assert!(!out.contains("limit_share"));
+        assert!(parsed["account"]["last_5h"]["peak_comparable_window_tokens"].is_null());
+    }
+
     #[test]
     fn a_session_with_no_activity_still_produces_a_report() {
         let empty = SessionSnapshot::empty("/tmp/t.jsonl".into(), "none".to_owned());
-        assert!(text(&empty).contains("none"));
-        assert!(serde_json::from_str::<serde_json::Value>(&json(&empty)).is_ok());
+        assert!(text(&empty, None).contains("none"));
+        assert!(serde_json::from_str::<serde_json::Value>(&json(&empty, None)).is_ok());
     }
 }
