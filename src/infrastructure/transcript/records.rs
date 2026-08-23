@@ -54,6 +54,33 @@ pub struct Record {
 
     #[serde(default, rename = "sessionId")]
     pub session_id: Option<String>,
+
+    /// The rate-limit block the API attaches to a refusal.
+    ///
+    /// Present only on a 429: there is no "you are 60% of the way there"
+    /// variant, which is why the dashboard cannot show a true limit
+    /// percentage and reports measured consumption instead.
+    #[serde(default, rename = "quotaLimits")]
+    pub quota_limits: Option<QuotaLimits>,
+}
+
+/// The `quotaLimits` block on a rate-limited response.
+#[derive(Debug, Clone, Deserialize)]
+pub struct QuotaLimits {
+    /// `rejected` when the request was actually refused. No other value has
+    /// been observed in a transcript, but it is matched on rather than
+    /// assumed, so a future `warned` state cannot be mistaken for a refusal.
+    #[serde(default)]
+    pub status: String,
+
+    /// When the limit lifts, as seconds since the Unix epoch.
+    #[serde(default, rename = "resetsAt")]
+    pub resets_at: Option<i64>,
+
+    /// Which limit was hit: `five_hour` is the one Claude Code calls a
+    /// session limit, `weekly` the seven-day one.
+    #[serde(default, rename = "rateLimitType")]
+    pub rate_limit_type: Option<String>,
 }
 
 /// The `message` object of an `assistant` or `user` entry.

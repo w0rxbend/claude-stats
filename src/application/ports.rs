@@ -12,6 +12,7 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 
+use crate::domain::limits::AccountUsage;
 use crate::domain::session::SessionSnapshot;
 
 /// A transcript file the dashboard could attach to.
@@ -82,6 +83,25 @@ pub trait SessionReader {
     /// half-written one, and refusing to draw the dashboard because of it
     /// would make the tool useless exactly when it is most wanted.
     fn read(&self, transcript: &TranscriptRef) -> anyhow::Result<SessionSnapshot>;
+}
+
+/// Adds up usage across every session on the account.
+///
+/// Separate from [`SessionReader`] because the question is a different shape:
+/// a reader answers "what is in this transcript", while this answers "what
+/// have I spent lately", which no single transcript can answer. Behind a trait
+/// so the dashboard can be driven from a fake in a test rather than from a
+/// directory of files.
+pub trait AccountUsageReader {
+    /// Usage as of `now`.
+    ///
+    /// Takes `&mut self` because an implementation is expected to cache: the
+    /// honest signature for something that remembers what it read last time.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying store cannot be listed.
+    fn usage(&mut self, now: DateTime<Utc>) -> anyhow::Result<AccountUsage>;
 }
 
 /// Tells the caller whether the thing it is watching has changed.
