@@ -73,13 +73,61 @@ however far down they scroll.
 
 ## Install
 
+### One line
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/w0rxbend/claudetui-rs/main/install.sh | sh
+```
+
+Downloads a prebuilt binary for your machine, checks it against the release's published
+SHA-256, and installs it to `~/.local/bin`. Nothing is compiled and no Rust toolchain is
+needed. It will tell you if that directory is not on your `PATH`.
+
+Two optional knobs:
+
+```bash
+CLAUDETUI_VERSION=v0.1.0 curl -fsSL .../install.sh | sh   # pin a version
+CLAUDETUI_INSTALL_DIR=/usr/local/bin curl -fsSL .../install.sh | sh
+```
+
+The installer never escalates to `sudo` on its own. If you want it somewhere privileged,
+say so with `CLAUDETUI_INSTALL_DIR` and run it under `sudo` yourself.
+
+### Prebuilt binaries
+
+Every [release](https://github.com/w0rxbend/claudetui-rs/releases) attaches an archive per
+platform, plus a `SHA256SUMS` covering all of them:
+
+| Platform | Archive |
+|---|---|
+| macOS, Apple silicon | `claudetui-<version>-aarch64-apple-darwin.tar.gz` |
+| macOS, Intel | `claudetui-<version>-x86_64-apple-darwin.tar.gz` |
+| Linux, x86-64 | `claudetui-<version>-x86_64-unknown-linux-musl.tar.gz` |
+| Linux, ARM64 | `claudetui-<version>-aarch64-unknown-linux-musl.tar.gz` |
+
+The Linux builds are statically linked against musl, so they run on any distribution
+regardless of its glibc version — including Alpine and distroless containers. The crate has
+no C dependencies, so nothing is given up for that.
+
+Windows is not supported directly; use [WSL 2](https://learn.microsoft.com/windows/wsl/install)
+and the Linux instructions.
+
+### From source
+
 Requires Rust 1.85 or newer.
 
 ```bash
-git clone https://github.com/w0rxbend/claudetui-rs
-cd claudetui-rs
-cargo install --path .
+cargo install --git https://github.com/w0rxbend/claudetui-rs
 ```
+
+### Uninstall
+
+```bash
+rm ~/.local/bin/claudetui
+```
+
+The tool writes no configuration and no state — it only ever reads Claude Code's own
+transcript files — so removing the binary removes all of it.
 
 ---
 
