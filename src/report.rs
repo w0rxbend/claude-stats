@@ -1,4 +1,10 @@
-//! The one-shot text and JSON reports behind `claude-stats stats`.
+//! The rendered output of every command that is not the dashboard: the text
+//! and JSON reports behind `claude-stats stats`, the session listing behind
+//! `sessions`, and the price table behind `models`.
+//!
+//! Every function here returns a `String` rather than printing, so the output
+//! can be asserted on in a test without capturing stdout. The composition root
+//! does the printing.
 //!
 //! Separate from the dashboard because the audiences are different. The
 //! dashboard is watched; a report is read once, pasted into an issue, or piped
@@ -9,8 +15,10 @@ use std::fmt::Write as _;
 
 use serde_json::json;
 
+use crate::application::ports::TranscriptRef;
 use crate::domain::context::CompactionDistance;
 use crate::domain::limits::{AccountUsage, WindowUsage};
+use crate::domain::model::ModelCatalog;
 use crate::domain::session::SessionSnapshot;
 use crate::tui::format;
 
@@ -251,9 +259,142 @@ fn window_json(window: &WindowUsage) -> serde_json::Value {
     })
 }
 
+/// The session listing behind `claude-stats sessions`.
+///
+/// `limit` caps the rows shown; anything beyond it is reported as a count so
+/// the reader knows the list was cut rather than assuming it was complete.
+#[must_use]
+pub fn sessions(all: &[TranscriptRef], limit: usize) -> String {
+    if all.is_empty() {
+        return "no Claude Code sessions found under ~/.claude/projects \
+                (set CLAUDE_CONFIG_DIR if Claude Code stores its state elsewhere)\n"
+            .to_owned();
+    }
+
+    let mut out = format!(
+        "{:<10}  {:<16}  {:>8}  PROJECT\n",
+        "SESSION", "MODIFIED", "SIZE"
+    );
+    for session in all.iter().take(limit) {
+        let _ = writeln!(
+            out,
+            "{:<10}  {:<16}  {:>7}K  {}",
+            format::session_id(&session.session_id),
+            session.modified_at.format("%Y-%m-%d %H:%M"),
+            session.size_bytes / 1_024,
+            session.project_dir,
+        );
+    }
+    if all.len() > limit {
+        let _ = writeln!(out, "\n... and {} more (use --limit)", all.len() - limit);
+    }
+    out
+}
+
+/// The model catalogue and its prices, behind `claude-stats models`.
+#[must_use]
+pub fn models() -> String {
+    const MODELS: &[&str] = &[
+        "claude-fable-5",
+        "claude-opus-5",
+        "claude-opus-4-8",
+        "claude-sonnet-5",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
+    ];
+
+    let mut out = format!(
+        "\n{:<14}{:>12}{:>10}{:>12}{:>13}{:>10}\n",
+        "MODEL", "CONTEXT", "INPUT", "CACHE READ", "CACHE WRITE", "OUTPUT"
+    );
+    let _ = writeln!(out, "{}", "-".repeat(71));
+    for id in MODELS {
+        let pricing = ModelCatalog::pricing_for(id);
+        let _ = writeln!(
+            out,
+            "{:<14}{:>11}k{:>9.2}{:>12.2}{:>13.2}{:>10.2}",
+            ModelCatalog::display_name_for(id),
+            ModelCatalog::context_window_for(id) / 1_000,
+            pricing.input.dollars_per_million(),
+            pricing.cache_read.dollars_per_million(),
+            pricing.cache_write.dollars_per_million(),
+            pricing.output.dollars_per_million(),
+        );
+    }
+    out.push_str("\nprices are US dollars per million tokens\n\n");
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::DateTime;
+
+    #[test]
+    fn the_model_table_lists_every_headline_model_with_its_window() {
+        let table = models();
+        assert!(table.contains("Opus 5"));
+        assert!(table.contains("Haiku 4.5"));
+        assert!(table.contains("1000k"), "the 1M window should be shown");
+        assert!(table.contains("200k"), "the 200k window should be shown");
+    }
+
+    fn transcript(id: &str, project: &str, size_bytes: u64) -> TranscriptRef {
+        TranscriptRef {
+            path: format!("/tmp/{id}.jsonl").into(),
+            session_id: id.to_owned(),
+            project_dir: project.to_owned(),
+            modified_at: DateTime::from_timestamp(1_700_000_000, 0).expect("valid timestamp"),
+            size_bytes,
+        }
+    }
+
+    #[test]
+    fn an_empty_session_list_says_where_it_looked() {
+        let out = sessions(&[], 10);
+        assert!(out.contains("no Claude Code sessions found"));
+        assert!(
+            out.contains("CLAUDE_CONFIG_DIR"),
+            "a user with a relocated config needs the way out: {out:?}"
+        );
+    }
+
+    #[test]
+    fn the_session_list_truncates_ids_and_reports_sizes_in_kibibytes() {
+        let out = sessions(
+            &[transcript("0f3a9c21-1b2c-4d5e", "/home/me/work", 5_120)],
+            10,
+        );
+        assert!(out.contains("SESSION"), "the header is missing: {out:?}");
+        assert!(out.contains("0f3a9c21"), "the id should be cut to eight");
+        assert!(
+            !out.contains("0f3a9c21-1b2c"),
+            "the full id should not be shown: {out:?}"
+        );
+        assert!(out.contains("5K"), "5120 bytes is 5K: {out:?}");
+        assert!(out.contains("/home/me/work"));
+    }
+
+    #[test]
+    fn a_truncated_session_list_says_how_many_it_hid() {
+        let all = [
+            transcript("aaaaaaaa-1", "/a", 1_024),
+            transcript("bbbbbbbb-2", "/b", 1_024),
+            transcript("cccccccc-3", "/c", 1_024),
+        ];
+
+        let out = sessions(&all, 1);
+
+        assert!(out.contains("aaaaaaaa"));
+        assert!(
+            !out.contains("bbbbbbbb"),
+            "the limit should have cut this row: {out:?}"
+        );
+        assert!(
+            out.contains("and 2 more"),
+            "a cut list must say it was cut: {out:?}"
+        );
+    }
 
     fn snapshot() -> SessionSnapshot {
         let mut s = SessionSnapshot::empty("/tmp/t.jsonl".into(), "abc123".to_owned());
