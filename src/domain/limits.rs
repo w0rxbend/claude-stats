@@ -102,6 +102,13 @@ pub struct WindowUsage {
     /// ceiling that is actually known. `None` when there is no history to
     /// compare against yet.
     pub peak: Option<u64>,
+    /// How many distinct limit periods began inside this window.
+    ///
+    /// The count that answers "am I running into this repeatedly, or was that
+    /// one bad afternoon". Zero for a window in which nothing was refused.
+    pub limit_periods: usize,
+    /// When the most recent limit inside this window began.
+    pub last_limit_at: Option<DateTime<Utc>>,
 }
 
 impl WindowUsage {
@@ -115,6 +122,8 @@ impl WindowUsage {
             sessions: 0,
             since: now - kind.span(),
             peak: None,
+            limit_periods: 0,
+            last_limit_at: None,
         }
     }
 
@@ -200,6 +209,8 @@ impl AccountUsage {
         limit_events: Vec<LimitEvent>,
     ) -> Self {
         let mut usage = Self::empty(now);
+        let mut limit_events = limit_events;
+        limit_events.sort_by_key(|e| e.at);
         for kind in [WindowKind::Session, WindowKind::Week] {
             let since = now - kind.span();
             let mut window = WindowUsage::empty(kind, now);
@@ -217,13 +228,23 @@ impl AccountUsage {
                 }
             }
             window.peak = peak_window(contributions, kind, now);
+
+            // A limit that bit inside this window is part of what the window
+            // describes: "2.5B tokens and two limits" is a different week from
+            // "2.5B tokens and none".
+            let inside: Vec<&LimitEvent> = limit_events
+                .iter()
+                .filter(|e| e.at >= since && e.at <= now)
+                .collect();
+            window.limit_periods = inside.len();
+            window.last_limit_at = inside.iter().map(|e| e.at).max();
+
             match kind {
                 WindowKind::Session => usage.session = window,
                 WindowKind::Week => usage.week = window,
             }
         }
         usage.limit_events = limit_events;
-        usage.limit_events.sort_by_key(|e| e.at);
         usage
     }
 
@@ -399,6 +420,47 @@ mod tests {
 
         assert_eq!(usage.session.peak, None);
         assert_eq!(usage.session.share_of_peak(), None);
+    }
+
+    #[test]
+    fn each_window_counts_the_limits_that_bit_inside_it() {
+        let now = at(60 * 24 * 3); // three days in
+        let recent = LimitEvent {
+            at: now - Duration::hours(2),
+            resets_at: now - Duration::hours(1),
+            kind: WindowKind::Session,
+        };
+        let older = LimitEvent {
+            at: now - Duration::days(2),
+            resets_at: now - Duration::days(2) + Duration::hours(1),
+            kind: WindowKind::Session,
+        };
+        let ancient = LimitEvent {
+            at: now - Duration::days(20),
+            resets_at: now - Duration::days(20) + Duration::hours(1),
+            kind: WindowKind::Session,
+        };
+        let usage = AccountUsage::measure(now, &[], vec![ancient, recent, older]);
+
+        assert_eq!(usage.session.limit_periods, 1, "only the one two hours ago");
+        assert_eq!(usage.session.last_limit_at, Some(recent.at));
+
+        assert_eq!(usage.week.limit_periods, 2, "the ancient one is outside");
+        assert_eq!(
+            usage.week.last_limit_at,
+            Some(recent.at),
+            "the most recent inside the week"
+        );
+    }
+
+    #[test]
+    fn a_window_with_no_refusals_reports_none_rather_than_a_zero_date() {
+        let now = at(600);
+        let usage = AccountUsage::measure(now, &[], Vec::new());
+
+        assert_eq!(usage.session.limit_periods, 0);
+        assert_eq!(usage.session.last_limit_at, None);
+        assert_eq!(usage.active_limit(), None);
     }
 
     #[test]

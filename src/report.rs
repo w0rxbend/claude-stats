@@ -121,11 +121,16 @@ fn account(out: &mut String, usage: &AccountUsage) {
             out,
             &format!("last {}", window.kind.span_label()),
             format!(
-                "{} tokens  {}  ({} session{})",
+                "{} tokens  {}  ({} session{}{})",
                 format::tokens(window.tokens.total()),
                 window.cost,
                 window.sessions,
-                if window.sessions == 1 { "" } else { "s" }
+                if window.sessions == 1 { "" } else { "s" },
+                match window.limit_periods {
+                    0 => String::new(),
+                    1 => ", 1 limit hit".to_owned(),
+                    n => format!(", {n} limits hit"),
+                }
             ),
         );
     }
@@ -237,6 +242,8 @@ fn window_json(window: &WindowUsage) -> serde_json::Value {
         "tokens": window.tokens.total(),
         "cost_usd": window.cost.dollars(),
         "sessions": window.sessions,
+        "limit_periods": window.limit_periods,
+        "last_limit_at": window.last_limit_at,
         // Named for what it is. There is deliberately no "share of limit"
         // here: that number is not knowable from a transcript.
         "peak_comparable_window_tokens": window.peak,

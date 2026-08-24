@@ -123,7 +123,7 @@ fn window_lines(window: &WindowUsage, accent: Color) -> Vec<Line<'static>> {
         || "no busier window on record".to_owned(),
         |share| format!("{} vs peak", format::percent(share)),
     );
-    let detail = Line::from(vec![
+    let mut spans = vec![
         Span::raw("           "),
         Span::styled(format!("{}", window.cost), Style::default().fg(Theme::CYAN)),
         Span::styled(
@@ -139,9 +139,26 @@ fn window_lines(window: &WindowUsage, accent: Color) -> Vec<Line<'static>> {
             format!("  {} {comparison}", Icon::SEPARATOR),
             Style::default().fg(Theme::FAINT),
         ),
-    ]);
+    ];
 
-    vec![headline, detail]
+    // How often a limit actually bit inside this window. Without this the
+    // panel is silent about limits except in the minutes you are being
+    // refused, which is precisely when you are least able to act on it.
+    if window.limit_periods > 0 {
+        spans.push(Span::styled(
+            format!(
+                "  {} {} limit{}",
+                Icon::SEPARATOR,
+                window.limit_periods,
+                if window.limit_periods == 1 { "" } else { "s" }
+            ),
+            Style::default()
+                .fg(Theme::AMBER)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    vec![headline, Line::from(spans)]
 }
 
 /// The banner shown while a limit is actually in force.
@@ -282,6 +299,25 @@ mod tests {
         assert!(
             out.contains("42m"),
             "the countdown, from the server's reset"
+        );
+    }
+
+    #[test]
+    fn a_window_reports_the_limits_that_bit_inside_it_even_once_they_lift() {
+        // The panel must say something about limits when you are *not* being
+        // refused; that is when the information is actually actionable.
+        let limit = LimitEvent {
+            at: now() - chrono::Duration::hours(3),
+            resets_at: now() - chrono::Duration::hours(2),
+            kind: WindowKind::Session,
+        };
+        let usage = AccountUsage::measure(now(), &[], vec![limit]);
+        let out = render(&usage, true, 90, 8);
+
+        assert!(out.contains("1 limit"), "counted in the five-hour window");
+        assert!(
+            !out.contains("limit reached"),
+            "but not announced as current, because it has lifted"
         );
     }
 
