@@ -45,7 +45,7 @@ pub struct UsagePoint {
 }
 
 /// Which rolling window a figure describes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WindowKind {
     /// The five-hour window Claude Code calls a "session limit".
     Session,
@@ -170,6 +170,29 @@ impl LimitEvent {
     pub fn time_until_reset(&self, now: DateTime<Utc>) -> Option<Duration> {
         self.is_active_at(now).then(|| self.resets_at - now)
     }
+
+    /// Collapses a run of refusals into the limit periods they belong to.
+    ///
+    /// Being refused ten times in the twenty minutes before a reset is one
+    /// limit being hit, not ten: every one of those refusals carries the same
+    /// reset instant, and that instant together with the kind of limit is what
+    /// identifies the period. The earliest refusal in each period is the one
+    /// kept, because that is when the limit began to bite.
+    ///
+    /// This is a rule about what a limit period *is*, so it lives here rather
+    /// than in whichever adapter happened to collect the refusals. Running it
+    /// over an already-collapsed list changes nothing.
+    #[must_use]
+    pub fn collapse_periods(mut events: Vec<Self>) -> Vec<Self> {
+        // The sort key must start with the whole dedup key: `dedup_by_key`
+        // only removes *consecutive* duplicates, so sorting by `resets_at`
+        // alone would interleave a five-hour and a weekly refusal that share a
+        // reset instant and let both survive. The trailing `at` is what makes
+        // the earliest refusal of each period the one that stays.
+        events.sort_by_key(|e| (e.resets_at, e.kind, e.at));
+        events.dedup_by_key(|e| (e.resets_at, e.kind));
+        events
+    }
 }
 
 /// Everything the dashboard knows about account-wide usage.
@@ -179,7 +202,9 @@ pub struct AccountUsage {
     pub session: WindowUsage,
     /// The last seven days.
     pub week: WindowUsage,
-    /// Every refusal seen in the scanned history, oldest first.
+    /// One event per distinct limit period in the scanned history, oldest
+    /// first. A run of refusals sharing a reset instant is collapsed to its
+    /// earliest by [`LimitEvent::collapse_periods`].
     pub limit_events: Vec<LimitEvent>,
     /// When this was computed.
     pub measured_at: DateTime<Utc>,
@@ -197,11 +222,20 @@ impl AccountUsage {
         }
     }
 
-    /// Adds up `points` into both windows, and records which limits were hit.
+    /// Adds up `contributions` into both windows, and records which limits
+    /// bit inside each one.
     ///
-    /// `points` may arrive in any order and from any number of sessions;
-    /// `sessions` is how many distinct transcripts contributed each point, so
-    /// the count is taken from the caller rather than guessed from timestamps.
+    /// Each element of `contributions` is one transcript's worth of
+    /// [`UsagePoint`]s. They may arrive in any order: a point counts toward a
+    /// window when `since <= point.at <= now`, and a contribution adds one to
+    /// [`WindowUsage::sessions`] if *any* of its points land inside, so two
+    /// transcripts overlapping in time are counted as two sessions rather than
+    /// one long one.
+    ///
+    /// `limit_events` may be the raw refusals; they are collapsed into distinct
+    /// limit periods by [`LimitEvent::collapse_periods`] and then sorted oldest
+    /// first. Each window's [`WindowUsage::limit_periods`] and
+    /// [`WindowUsage::last_limit_at`] reflect only the periods inside it.
     #[must_use]
     pub fn measure(
         now: DateTime<Utc>,
@@ -209,7 +243,10 @@ impl AccountUsage {
         limit_events: Vec<LimitEvent>,
     ) -> Self {
         let mut usage = Self::empty(now);
-        let mut limit_events = limit_events;
+        let mut limit_events = LimitEvent::collapse_periods(limit_events);
+        // Collapsing groups by reset instant; the field is documented oldest
+        // first by the moment of refusal, which the reports and the panel
+        // iterate in order.
         limit_events.sort_by_key(|e| e.at);
         for kind in [WindowKind::Session, WindowKind::Week] {
             let since = now - kind.span();
@@ -341,6 +378,67 @@ mod tests {
             session_id: id.to_owned(),
             points,
         }
+    }
+
+    #[test]
+    fn a_run_of_refusals_before_one_reset_is_a_single_limit_period() {
+        let now = at(600);
+        let resets_at = now + Duration::hours(1);
+        // Ten refusals in the twenty minutes before one reset. That is one
+        // limit being hit, not ten.
+        let refusals: Vec<LimitEvent> = (0..10)
+            .map(|i| LimitEvent {
+                at: now - Duration::minutes(20 - i),
+                resets_at,
+                kind: WindowKind::Session,
+            })
+            .collect();
+        let earliest = refusals[0].at;
+
+        let usage = AccountUsage::measure(now, &[], refusals);
+
+        assert_eq!(usage.limit_events.len(), 1);
+        assert_eq!(usage.session.limit_periods, 1);
+        assert_eq!(
+            usage.session.last_limit_at,
+            Some(earliest),
+            "the period is dated from when it began to bite"
+        );
+    }
+
+    #[test]
+    fn two_kinds_of_limit_sharing_a_reset_stay_two_periods() {
+        let now = at(600);
+        let resets_at = now + Duration::hours(1);
+        // Interleaved on purpose: session, week, session. Grouping only by
+        // reset instant would leave the two session refusals non-adjacent, and
+        // collapsing consecutive duplicates would then miss one of them.
+        let refusals = vec![
+            LimitEvent {
+                at: now - Duration::minutes(30),
+                resets_at,
+                kind: WindowKind::Session,
+            },
+            LimitEvent {
+                at: now - Duration::minutes(20),
+                resets_at,
+                kind: WindowKind::Week,
+            },
+            LimitEvent {
+                at: now - Duration::minutes(10),
+                resets_at,
+                kind: WindowKind::Session,
+            },
+        ];
+
+        let usage = AccountUsage::measure(now, &[], refusals);
+
+        assert_eq!(
+            usage.limit_events.len(),
+            2,
+            "one period per kind, not one per refusal"
+        );
+        assert_eq!(usage.session.limit_periods, 2);
     }
 
     #[test]

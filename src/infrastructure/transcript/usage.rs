@@ -176,15 +176,9 @@ impl<C: TranscriptCatalog> AccountUsageReader for IncrementalUsageScanner<C> {
         // left running for a week does not accumulate them for ever.
         self.cache.retain(|path, _| seen.contains(path));
 
-        // Collapse a run of refusals into the one limit period they belong to.
-        // Being refused ten times in the twenty minutes before a reset is one
-        // limit being hit, not ten -- every one of those records carries the
-        // same reset instant, which is what identifies the period. The
-        // earliest refusal is kept, because that is when the limit began to
-        // bite.
-        limit_events.sort_by_key(|e| (e.resets_at, e.at));
-        limit_events.dedup_by_key(|e| (e.resets_at, e.kind));
-
+        // The refusals go over raw. Collapsing them into distinct limit
+        // periods is a rule about what a limit period is, so it belongs to the
+        // domain -- see `LimitEvent::collapse_periods`, which `measure` calls.
         Ok(AccountUsage::measure(now, &contributions, limit_events))
     }
 }
