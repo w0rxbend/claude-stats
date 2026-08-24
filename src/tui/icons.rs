@@ -14,6 +14,8 @@
 //! is also single-width, so a column of them cannot shear a layout on a
 //! terminal that disagrees about East Asian ambiguous widths.
 
+use crate::domain::activity::ToolKind;
+
 /// Named glyphs, grouped by what they are for.
 pub struct Icon;
 
@@ -66,6 +68,26 @@ impl Icon {
     pub const BAR_FULL: &'static str = "\u{2588}";
     /// The empty cell of a progress bar.
     pub const BAR_EMPTY: &'static str = "\u{2591}";
+
+    /// The glyph identifying a tool kind in the activity feed.
+    ///
+    /// Plain Unicode, not a Nerd Font: the dashboard has to look right in a
+    /// terminal that has no patched font installed. Which glyph stands for
+    /// "this was a search" is a rendering decision, so it lives here with
+    /// every other symbol on screen rather than on the domain enum.
+    #[must_use]
+    pub const fn tool_kind(kind: ToolKind) -> &'static str {
+        match kind {
+            ToolKind::Read => "\u{25c8}",    // a filled lozenge
+            ToolKind::Write => "\u{270e}",   // a pencil
+            ToolKind::Search => "\u{2315}",  // a magnifier
+            ToolKind::Shell => "\u{25b6}",   // a play triangle
+            ToolKind::Agent => "\u{2726}",   // a four-pointed star
+            ToolKind::Skill => "\u{2698}",   // a flower
+            ToolKind::Network => "\u{2601}", // a cloud
+            ToolKind::Other => "\u{2022}",   // a bullet
+        }
+    }
 }
 
 /// The eight partial block characters, for sub-cell bar precision.
@@ -131,6 +153,43 @@ mod tests {
             assert!(
                 !(0xe000..=0xf8ff).contains(&code),
                 "{glyph:?} is a private-use code point"
+            );
+        }
+    }
+
+    /// Every tool kind, so the two guarantees below cannot miss a variant
+    /// added later.
+    const ALL_TOOL_KINDS: [ToolKind; 8] = [
+        ToolKind::Read,
+        ToolKind::Write,
+        ToolKind::Search,
+        ToolKind::Shell,
+        ToolKind::Agent,
+        ToolKind::Skill,
+        ToolKind::Network,
+        ToolKind::Other,
+    ];
+
+    #[test]
+    fn every_tool_glyph_is_a_single_character() {
+        for kind in ALL_TOOL_KINDS {
+            let glyph = Icon::tool_kind(kind);
+            assert_eq!(
+                glyph.chars().count(),
+                1,
+                "{kind:?} renders {glyph:?}, which is not one character"
+            );
+        }
+    }
+
+    #[test]
+    fn no_tool_glyph_comes_from_the_private_use_area() {
+        for kind in ALL_TOOL_KINDS {
+            let glyph = Icon::tool_kind(kind);
+            let code = glyph.chars().next().expect("one char") as u32;
+            assert!(
+                !(0xe000..=0xf8ff).contains(&code),
+                "{kind:?} renders {glyph:?}, a private-use code point"
             );
         }
     }

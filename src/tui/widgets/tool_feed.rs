@@ -98,7 +98,7 @@ impl ToolFeed<'_> {
         } else if newest && self.running {
             Spinner::new(SpinnerStyle::Braille, self.phase).glyph()
         } else {
-            event.kind.glyph()
+            Icon::tool_kind(event.kind)
         };
 
         let mut style = Style::default().fg(colour);

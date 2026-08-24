@@ -46,24 +46,6 @@ impl ToolKind {
             _ => Self::Other,
         }
     }
-
-    /// A single glyph identifying the kind in dense layouts.
-    ///
-    /// Plain Unicode, not a Nerd Font: the dashboard has to look right in a
-    /// terminal that has no patched font installed.
-    #[must_use]
-    pub const fn glyph(self) -> &'static str {
-        match self {
-            Self::Read => "\u{25c8}",    // a filled lozenge
-            Self::Write => "\u{270e}",   // a pencil
-            Self::Search => "\u{2315}",  // a magnifier
-            Self::Shell => "\u{25b6}",   // a play triangle
-            Self::Agent => "\u{2726}",   // a four-pointed star
-            Self::Skill => "\u{2698}",   // a flower
-            Self::Network => "\u{2601}", // a cloud
-            Self::Other => "\u{2022}",   // a bullet
-        }
-    }
 }
 
 /// One tool call, as it appears in the live activity feed.
