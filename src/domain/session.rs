@@ -413,6 +413,58 @@ mod tests {
     }
 
     #[test]
+    fn a_file_both_read_and_edited_counts_once() {
+        let mut s = snapshot_with(vec![]);
+        s.files_read.insert("a.rs".to_owned(), 1);
+        s.files_read.insert("b.rs".to_owned(), 1);
+        s.files_edited.insert("b.rs".to_owned(), 1);
+        s.files_edited.insert("c.rs".to_owned(), 1);
+
+        // Three distinct files, not four: b.rs was read and then edited, which
+        // is the ordinary way a file is worked on.
+        assert_eq!(s.files_touched(), 3);
+    }
+
+    #[test]
+    fn each_compaction_marks_the_first_sample_after_it() {
+        let mut s = snapshot_with(vec![
+            sample(1, 10_000, 1),
+            sample(2, 20_000, 2),
+            sample(3, 30_000, 4),
+            sample(4, 40_000, 6),
+            sample(5, 50_000, 8),
+        ]);
+        for (turn, seconds) in [(3, 3), (5, 7)] {
+            s.compactions.push(CompactionEvent {
+                turn,
+                context_before: 900_000,
+                context_after: 40_000,
+                turns_in_segment: 2,
+                at: at(seconds),
+            });
+        }
+
+        // The marker sits on the first sample dated after the compaction, so
+        // the sparkline shows the drop where it actually happened. This is the
+        // invariant the parser's `at_or_position` exists to protect: a record
+        // with no timestamp, dated `Utc::now()` instead, would sort after every
+        // real sample and shove both markers to the end of the series.
+        assert_eq!(s.compaction_marker_indices(), vec![2, 4]);
+    }
+
+    #[test]
+    fn the_burn_rate_divides_the_accrued_cost_by_the_wall_clock_hours() {
+        let mut s = snapshot_with(vec![sample(1, 10_000, 1)]);
+        s.started_at = Some(at(0));
+        s.last_activity_at = Some(at(7_200));
+        s.cost_accrued = Usd::new(10.0);
+
+        // Ten dollars over two hours is five dollars an hour.
+        let rate = s.burn_rate_per_hour().expect("two hours is long enough");
+        assert!((rate.dollars() - 5.0).abs() < 1e-9, "got {rate:?}");
+    }
+
+    #[test]
     fn context_fill_reads_the_latest_call_not_the_session_total() {
         let s = snapshot_with(vec![sample(1, 10_000, 1), sample(2, 25_000, 2)]);
         assert_eq!(s.context_fill().used(), 25_000);
