@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
+use anyhow::Context as _;
 use chrono::{DateTime, Utc};
 
 use super::records::{Block, Record};
@@ -35,7 +36,11 @@ pub struct TranscriptParser;
 
 impl SessionReader for TranscriptParser {
     fn read(&self, transcript: &TranscriptRef) -> anyhow::Result<SessionSnapshot> {
-        let contents = std::fs::read_to_string(&transcript.path)?;
+        // The path belongs in the message: this error is rendered in the
+        // dashboard footer, where a bare "No such file or directory (os error
+        // 2)" tells the reader nothing about which file went missing.
+        let contents = std::fs::read_to_string(&transcript.path)
+            .with_context(|| format!("reading transcript {}", transcript.path.display()))?;
         Ok(Self::parse(
             &transcript.path,
             &transcript.session_id,

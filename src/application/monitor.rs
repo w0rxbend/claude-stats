@@ -181,7 +181,10 @@ where
             }
             Ok(None) => Tick::Searching,
             Err(error) => {
-                self.last_error = Some(error.to_string());
+                // `{:#}` keeps the whole context chain -- "reading transcript
+                // /path/x.jsonl: No such file or directory" -- where
+                // `to_string()` would show only the outermost layer.
+                self.last_error = Some(format!("{error:#}"));
                 Tick::Searching
             }
         }
@@ -215,13 +218,6 @@ where
         true
     }
 
-    /// Re-reads the attached transcript, keeping the previous snapshot on
-    /// failure.
-    ///
-    /// A read can fail transiently -- the file is being rotated, a permission
-    /// is briefly wrong -- and blanking the dashboard for a moment would be
-    /// worse than showing numbers that are one second stale next to an error
-    /// message saying so.
     /// Points the monitor at `transcript`: watch it, remember it, read it.
     ///
     /// The one place the attach sequence is written down. It used to appear in
@@ -233,6 +229,13 @@ where
         self.reload();
     }
 
+    /// Re-reads the attached transcript, keeping the previous snapshot on
+    /// failure.
+    ///
+    /// A read can fail transiently -- the file is being rotated, a permission
+    /// is briefly wrong -- and blanking the dashboard for a moment would be
+    /// worse than showing numbers that are one second stale next to an error
+    /// message saying so.
     fn reload(&mut self) {
         let Some(transcript) = &self.attached else {
             return;
@@ -242,7 +245,7 @@ where
                 self.snapshot = Some(snapshot);
                 self.last_error = None;
             }
-            Err(error) => self.last_error = Some(error.to_string()),
+            Err(error) => self.last_error = Some(format!("{error:#}")),
         }
     }
 }
