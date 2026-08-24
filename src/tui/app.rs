@@ -332,9 +332,14 @@ where
             View::Log => " q quit   d dashboard   j/k scroll   g/G ends   ? help ",
             View::Sessions => " q quit   j/k move   Enter attach   d dashboard   ? help ",
         };
+        // The monitor's error wins because it concerns the session actually on
+        // screen. The tracker's is the fallback: a failed account scan leaves
+        // the five-hour and weekly figures stale, and showing them with no
+        // word of it is the one thing the tracker keeps the error to avoid.
         let error = self
             .monitor
             .last_error()
+            .or_else(|| self.usage.as_ref().and_then(UsageTracker::last_error))
             .map(|e| format!("  {} {e}", Icon::ERROR));
 
         frame.render_widget(
@@ -358,7 +363,10 @@ mod tests {
     use chrono::Utc;
 
     use super::*;
-    use crate::application::ports::{ChangeSource, SessionSelector, TranscriptRef};
+    use crate::application::ports::{
+        AccountUsageReader, ChangeSource, SessionSelector, SystemClock, TranscriptRef,
+    };
+    use crate::domain::limits::AccountUsage;
     use crate::domain::session::SessionSnapshot;
 
     struct Catalog(Vec<TranscriptRef>);
@@ -418,6 +426,86 @@ mod tests {
 
     fn press(code: KeyCode) -> Action {
         Action::from_key(KeyEvent::new(code, KeyModifiers::NONE)).expect("bound key")
+    }
+
+    /// A reader that always fails, for checking that the failure is shown.
+    struct FailingUsage;
+
+    impl AccountUsageReader for FailingUsage {
+        fn usage(&mut self, _now: chrono::DateTime<Utc>) -> anyhow::Result<AccountUsage> {
+            Err(anyhow::anyhow!("usage scan failed"))
+        }
+    }
+
+    /// A reader whose transcripts cannot be read, so the monitor has an error
+    /// of its own to outrank the tracker's.
+    struct BrokenReader;
+
+    impl SessionReader for BrokenReader {
+        fn read(&self, _t: &TranscriptRef) -> anyhow::Result<SessionSnapshot> {
+            Err(anyhow::anyhow!("transcript unreadable"))
+        }
+    }
+
+    fn failing_tracker() -> UsageTracker {
+        let mut tracker = UsageTracker::new(Box::new(FailingUsage), Box::new(SystemClock));
+        tracker.scan();
+        tracker
+    }
+
+    /// Renders the whole app once and returns the screen as text.
+    fn rendered<C, R, F>(app: &mut App<C, R, F>) -> String
+    where
+        C: TranscriptCatalog,
+        R: SessionReader,
+        F: ChangeSourceFactory,
+    {
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40))
+            .expect("test backend");
+        terminal
+            .draw(|frame| app.draw(frame))
+            .expect("draw succeeds");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect()
+    }
+
+    #[test]
+    fn a_failed_account_scan_says_so_rather_than_showing_stale_figures_silently() {
+        let mut app = app(&["a"]).tracking_usage(failing_tracker());
+        app.tick();
+
+        assert!(
+            rendered(&mut app).contains("usage scan failed"),
+            "the tracker keeps this error precisely so it can be shown"
+        );
+    }
+
+    #[test]
+    fn the_attached_sessions_error_outranks_the_account_scans() {
+        let catalog = Catalog(vec![transcript("a")]);
+        let mut app = App::new(Monitor::new(
+            catalog,
+            BrokenReader,
+            Factory,
+            SessionSelector::Active,
+        ))
+        .tracking_usage(failing_tracker());
+        app.tick();
+
+        let screen = rendered(&mut app);
+        assert!(
+            screen.contains("transcript unreadable"),
+            "the session on screen is the more urgent failure"
+        );
+        assert!(
+            !screen.contains("usage scan failed"),
+            "only one error fits in the footer: {screen:?}"
+        );
     }
 
     #[test]
