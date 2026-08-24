@@ -18,10 +18,16 @@ use chrono::Duration;
 /// `2564.06M` is a number nobody can read at a glance.
 #[must_use]
 pub fn tokens(count: u64) -> String {
+    // These bounds are rounding boundaries, not unit boundaries, and the
+    // difference matters. 999_950 tokens divided by a thousand is 999.95,
+    // which `{:.1}` rounds to "1000.0" -- five digits where the whole point of
+    // the unit was to show four. So a count promotes to the next unit as soon
+    // as it would *round* into it, not when it reaches it. Do not "tidy" these
+    // back to 1_000_000 and 1_000_000_000.
     match count {
         n if n < 1_000 => n.to_string(),
-        n if n < 1_000_000 => format!("{:.1}k", n as f64 / 1_000.0),
-        n if n < 1_000_000_000 => format!("{:.2}M", n as f64 / 1_000_000.0),
+        n if n < 999_950 => format!("{:.1}k", n as f64 / 1_000.0),
+        n if n < 999_995_000 => format!("{:.2}M", n as f64 / 1_000_000.0),
         n => format!("{:.2}B", n as f64 / 1_000_000_000.0),
     }
 }
@@ -124,12 +130,56 @@ mod tests {
         assert_eq!(tokens(1_234), "1.2k");
         assert_eq!(tokens(953_429), "953.4k");
         assert_eq!(tokens(1_234_567), "1.23M");
-        assert_eq!(tokens(999_999_999), "1000.00M", "just under the rollover");
+        assert_eq!(
+            tokens(999_949),
+            "999.9k",
+            "the largest count that really is thousands"
+        );
+        assert_eq!(
+            tokens(999_950),
+            "1.00M",
+            "rounds up into millions rather than printing 1000.0k"
+        );
+        assert_eq!(
+            tokens(999_994_999),
+            "999.99M",
+            "the largest count that really is millions"
+        );
+        assert_eq!(
+            tokens(999_999_999),
+            "1.00B",
+            "rounds up into billions rather than printing 1000.00M"
+        );
         assert_eq!(
             tokens(2_564_060_000),
             "2.56B",
             "a week's worth of tokens stays readable"
         );
+    }
+
+    #[test]
+    fn token_counts_stay_within_seven_characters() {
+        // The tiles that show these have a fixed column width, so a count
+        // that renders one character too wide is a layout bug, not a cosmetic
+        // one. The boundary values are the ones that used to overflow.
+        for count in [
+            0,
+            999,
+            1_000,
+            999_949,
+            999_950,
+            1_234_567,
+            999_994_999,
+            999_999_999,
+            2_564_060_000,
+            // Billions is the last unit, so the guarantee stops just below
+            // the trillion that would round to "1000.00B". No account has
+            // ever come within three orders of magnitude of that.
+            999_994_999_999,
+        ] {
+            let text = tokens(count);
+            assert!(text.len() <= 7, "{text:?} is too wide for its column");
+        }
     }
 
     #[test]
