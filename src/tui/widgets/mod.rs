@@ -11,11 +11,17 @@
 //! [`crate::domain`] where it can be tested without a terminal.
 
 pub mod banner;
+pub mod burn_rate_gauge;
+pub mod daily_spend_chart;
+pub mod dollar_pulse;
 pub mod gauge;
 pub mod meter;
+pub mod model_breakdown;
 pub mod sparkline;
+pub mod spend_panel;
 pub mod spinner;
 pub mod stat_tile;
 pub mod token_mix;
 pub mod tool_feed;
+pub mod top_projects;
 pub mod usage_windows;

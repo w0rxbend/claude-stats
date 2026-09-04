@@ -6,31 +6,43 @@
 //! command line truncated to thirty columns is not evidence of anything.
 
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, BorderType, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
 
+use super::draw_tab_bar;
 use crate::domain::session::{LogEntry, LogLevel, SessionSnapshot};
 use crate::tui::format;
-use crate::tui::theme::Theme;
+use crate::tui::palette::Palette;
 
-/// Draws the log, scrolled so that `offset` entries from the bottom are hidden.
+/// Draws the tab bar on its own reserved top row, then the log beneath it,
+/// scrolled so that `offset` entries from the bottom are hidden.
 ///
 /// The offset is from the *bottom* because the newest entry is the one being
 /// followed; anchoring to the top would make the view slide out from under the
 /// reader every time a line is appended.
-pub fn draw(frame: &mut Frame<'_>, area: Rect, snapshot: &SessionSnapshot, offset: usize) {
+pub fn draw(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    snapshot: &SessionSnapshot,
+    offset: usize,
+    tab_index: usize,
+    palette: &Palette,
+) {
+    let [tab_bar, area] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
+    draw_tab_bar(frame, tab_bar, tab_index, palette);
+
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Theme::BORDER))
-        .style(Style::default().bg(Theme::SURFACE))
+        .border_style(Style::default().fg(palette.border.into()))
+        .style(Style::default().bg(palette.surface.into()))
         .padding(Padding::horizontal(1))
         .title(Span::styled(
             format!(" event log \u{00b7} {} entries ", snapshot.events.len()),
-            Theme::title(Theme::CYAN),
+            palette.title(palette.accent_primary.into()),
         ));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -49,7 +61,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, snapshot: &SessionSnapshot, offse
         .iter()
         .skip(start)
         .take(end - start)
-        .map(|entry| line_for(entry, inner.width as usize))
+        .map(|entry| line_for(entry, inner.width as usize, palette))
         .collect();
 
     frame.render_widget(Paragraph::new(lines), inner);
@@ -58,20 +70,20 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, snapshot: &SessionSnapshot, offse
         let mut state = ScrollbarState::new(total.saturating_sub(rows)).position(end - rows);
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .style(Style::default().fg(Theme::BORDER)),
+                .style(Style::default().fg(palette.border.into())),
             area,
             &mut state,
         );
     }
 }
 
-fn line_for(entry: &LogEntry, width: usize) -> Line<'_> {
+fn line_for<'a>(entry: &'a LogEntry, width: usize, palette: &Palette) -> Line<'a> {
     let colour = match entry.level {
-        LogLevel::Info => Theme::TEXT,
-        LogLevel::Notice => Theme::VIOLET,
-        LogLevel::Error => Theme::CRIMSON,
+        LogLevel::Info => palette.text,
+        LogLevel::Notice => palette.accent_secondary,
+        LogLevel::Error => palette.pressure_high,
     };
-    let mut style = Style::default().fg(colour);
+    let mut style = Style::default().fg(colour.into());
     if entry.level != LogLevel::Info {
         style = style.add_modifier(Modifier::BOLD);
     }
@@ -80,9 +92,59 @@ fn line_for(entry: &LogEntry, width: usize) -> Line<'_> {
     Line::from(vec![
         Span::styled(
             entry.at.format("%H:%M:%S").to_string(),
-            Style::default().fg(Theme::FAINT),
+            Style::default().fg(palette.faint.into()),
         ),
         Span::raw(" "),
         Span::styled(text, style),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use super::*;
+    use crate::tui::palette::registry::ThemeRegistry;
+
+    fn palette() -> Palette {
+        ThemeRegistry::builtin()
+            .get("aurora")
+            .expect("aurora is always registered")
+            .clone()
+    }
+
+    #[test]
+    fn the_tab_bar_is_drawn_above_the_log_panel() {
+        let snapshot = SessionSnapshot::empty("/tmp/t.jsonl".into(), "abc".to_owned());
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test backend");
+        terminal
+            .draw(|frame| draw(frame, frame.area(), &snapshot, 0, 5, &palette()))
+            .expect("draw succeeds");
+
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+        assert!(
+            screen.contains("Dashboard"),
+            "the tab bar names every tab: {screen}"
+        );
+        assert!(
+            screen.contains("event log"),
+            "and the log panel still shows: {screen}"
+        );
+    }
+
+    #[test]
+    fn drawing_into_a_tiny_area_does_not_panic() {
+        let snapshot = SessionSnapshot::empty("/tmp/t.jsonl".into(), "abc".to_owned());
+        let mut terminal = Terminal::new(TestBackend::new(3, 2)).expect("test backend");
+        terminal
+            .draw(|frame| draw(frame, frame.area(), &snapshot, 0, 5, &palette()))
+            .expect("draw succeeds");
+    }
 }

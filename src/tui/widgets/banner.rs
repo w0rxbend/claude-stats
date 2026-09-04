@@ -19,7 +19,7 @@ use ratatui::widgets::Widget;
 use tui_big_text::{BigText, PixelSize};
 
 use crate::domain::context::ContextFill;
-use crate::tui::theme::Theme;
+use crate::tui::palette::Palette;
 
 /// The context percentage at four-feet size.
 pub struct ContextBanner {
@@ -52,8 +52,9 @@ impl ContextBanner {
     }
 }
 
-impl Widget for ContextBanner {
-    fn render(self, area: Rect, buf: &mut Buffer) {
+impl ContextBanner {
+    /// Draws the banner, coloured by how full the context window is.
+    pub fn render(self, area: Rect, buf: &mut Buffer, palette: &Palette) {
         let Some(pixel_size) = Self::size_for(area.height) else {
             // Not enough room to render legibly. Drawing a clipped glyph is
             // worse than drawing nothing: half a digit still looks like a
@@ -62,7 +63,7 @@ impl Widget for ContextBanner {
         };
 
         let text = format!("{:.0}%", self.fill.percent());
-        let colour = Theme::severity(self.fill.severity());
+        let colour = palette.severity(self.fill.severity());
 
         BigText::builder()
             .pixel_size(pixel_size)
@@ -77,6 +78,14 @@ impl Widget for ContextBanner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::palette::registry::ThemeRegistry;
+
+    fn palette() -> Palette {
+        ThemeRegistry::builtin()
+            .get("aurora")
+            .expect("aurora is always registered")
+            .clone()
+    }
 
     #[test]
     fn the_banner_steps_down_a_size_before_it_would_be_clipped() {
@@ -95,7 +104,7 @@ mod tests {
     fn drawing_into_a_short_area_leaves_it_untouched_instead_of_panicking() {
         let area = Rect::new(0, 0, 20, 2);
         let mut buf = Buffer::empty(area);
-        ContextBanner::new(ContextFill::new(50, 100)).render(area, &mut buf);
+        ContextBanner::new(ContextFill::new(50, 100)).render(area, &mut buf, &palette());
         assert_eq!(buf[(0, 0)].symbol(), " ");
     }
 }

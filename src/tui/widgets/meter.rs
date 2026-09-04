@@ -9,7 +9,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::tui::icons::{EIGHTHS, Icon};
-use crate::tui::theme::Theme;
+use crate::tui::palette::Palette;
 
 /// Builds the `Line` for one labelled meter.
 ///
@@ -17,13 +17,14 @@ use crate::tui::theme::Theme;
 /// stacked inside a `Paragraph` alongside plain text rows. Making it a widget
 /// would force the caller to lay out one `Rect` per line for no benefit.
 #[must_use]
-pub fn meter_line(
-    label: &str,
+pub fn meter_line<'a>(
+    label: &'a str,
     ratio: f64,
     value: String,
     accent: Color,
     bar_width: usize,
-) -> Line<'_> {
+    palette: &Palette,
+) -> Line<'a> {
     let ratio = ratio.clamp(0.0, 1.0);
     let eighths = (ratio * (bar_width * 8) as f64).round() as usize;
 
@@ -42,7 +43,7 @@ pub fn meter_line(
         // Eleven columns, because the longest label in use is "efficiency"
         // at ten and a bar that starts flush against its label reads as one
         // run-on word.
-        Span::styled(format!("{label:<11}"), Theme::label()),
+        Span::styled(format!("{label:<11}"), palette.label()),
         Span::styled(bar, Style::default().fg(accent)),
         Span::raw(" "),
         Span::styled(
@@ -55,10 +56,26 @@ pub fn meter_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::palette::registry::ThemeRegistry;
+
+    fn palette() -> Palette {
+        ThemeRegistry::builtin()
+            .get("aurora")
+            .expect("aurora is always registered")
+            .clone()
+    }
 
     #[test]
     fn the_label_column_is_wide_enough_for_the_longest_label_plus_a_gap() {
-        let line = meter_line("efficiency", 1.0, "100%".to_owned(), Theme::MINT, 4);
+        let palette = palette();
+        let line = meter_line(
+            "efficiency",
+            1.0,
+            "100%".to_owned(),
+            palette.accent_success.into(),
+            4,
+            &palette,
+        );
         let label = line.spans[0].content.to_string();
         assert!(label.ends_with(' '), "{label:?} must not run into the bar");
     }
@@ -69,23 +86,54 @@ mod tests {
 
     #[test]
     fn a_full_meter_is_solid_and_an_empty_one_is_all_track() {
-        let full = meter_line("cache", 1.0, "100%".to_owned(), Theme::CYAN, 8);
+        let palette = palette();
+        let full = meter_line(
+            "cache",
+            1.0,
+            "100%".to_owned(),
+            palette.accent_primary.into(),
+            8,
+            &palette,
+        );
         assert_eq!(bar_of(&full), "\u{2588}".repeat(8));
 
-        let empty = meter_line("cache", 0.0, "0%".to_owned(), Theme::CYAN, 8);
+        let empty = meter_line(
+            "cache",
+            0.0,
+            "0%".to_owned(),
+            palette.accent_primary.into(),
+            8,
+            &palette,
+        );
         assert_eq!(bar_of(&empty), "\u{2591}".repeat(8));
     }
 
     #[test]
     fn a_ratio_outside_the_range_is_clamped_rather_than_overflowing_the_bar() {
-        let over = meter_line("x", 3.0, "300%".to_owned(), Theme::CYAN, 4);
+        let palette = palette();
+        let over = meter_line(
+            "x",
+            3.0,
+            "300%".to_owned(),
+            palette.accent_primary.into(),
+            4,
+            &palette,
+        );
         assert_eq!(bar_of(&over).chars().count(), 4);
     }
 
     #[test]
     fn the_bar_uses_partial_blocks_so_it_moves_smoothly() {
         // Half of one cell should be a half block, not a jump to a full one.
-        let half = meter_line("x", 0.5, "50%".to_owned(), Theme::CYAN, 1);
+        let palette = palette();
+        let half = meter_line(
+            "x",
+            0.5,
+            "50%".to_owned(),
+            palette.accent_primary.into(),
+            1,
+            &palette,
+        );
         assert_eq!(bar_of(&half), "\u{258c}");
     }
 }

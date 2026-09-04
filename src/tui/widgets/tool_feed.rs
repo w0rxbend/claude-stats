@@ -12,14 +12,14 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
 use crate::domain::activity::ToolEvent;
 use crate::tui::format;
 use crate::tui::icons::Icon;
-use crate::tui::theme::Theme;
+use crate::tui::palette::Palette;
 use crate::tui::widgets::spinner::{Spinner, SpinnerStyle};
 
 /// A newest-first list of recent tool calls.
@@ -48,15 +48,17 @@ impl<'a> ToolFeed<'a> {
     }
 }
 
-impl Widget for ToolFeed<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
+impl ToolFeed<'_> {
+    /// Draws the feed, newest call first and fading towards `palette.muted`
+    /// further down the list.
+    pub fn render(self, area: Rect, buf: &mut Buffer, palette: &Palette) {
         if area.is_empty() {
             return;
         }
         if self.events.is_empty() {
             Paragraph::new(Line::from(Span::styled(
                 "no tool activity this turn",
-                Style::default().fg(Theme::FAINT),
+                Style::default().fg(palette.faint.into()),
             )))
             .render(area, buf);
             return;
@@ -69,28 +71,32 @@ impl Widget for ToolFeed<'_> {
             .rev()
             .take(rows)
             .enumerate()
-            .map(|(depth, event)| self.line_for(event, depth, area.width as usize))
+            .map(|(depth, event)| self.line_for(event, depth, area.width as usize, palette))
             .collect();
 
         Paragraph::new(lines).render(area, buf);
     }
-}
 
-impl ToolFeed<'_> {
-    fn line_for<'t>(&self, event: &'t ToolEvent, depth: usize, width: usize) -> Line<'t> {
+    fn line_for<'t>(
+        &self,
+        event: &'t ToolEvent,
+        depth: usize,
+        width: usize,
+        palette: &Palette,
+    ) -> Line<'t> {
         let newest = depth == 0;
 
         // A failed call is always crimson, whatever its kind and however far
         // down the list it has scrolled: an error that fades out of notice is
         // an error that gets missed.
-        let colour = if event.failed {
-            Theme::CRIMSON
+        let colour: Color = if event.failed {
+            palette.pressure_high.into()
         } else if newest {
-            Theme::tool_kind(event.kind)
+            palette.tool_kind(event.kind)
         } else if depth < 3 {
-            Theme::TEXT
+            palette.text.into()
         } else {
-            Theme::MUTED
+            palette.muted.into()
         };
 
         let marker = if event.failed {
@@ -123,6 +129,14 @@ mod tests {
 
     use super::*;
     use crate::domain::activity::ToolKind;
+    use crate::tui::palette::registry::ThemeRegistry;
+
+    fn palette() -> Palette {
+        ThemeRegistry::builtin()
+            .get("aurora")
+            .expect("aurora is always registered")
+            .clone()
+    }
 
     fn event(name: &str, subject: &str, failed: bool) -> ToolEvent {
         ToolEvent {
@@ -139,7 +153,7 @@ mod tests {
         let queue: VecDeque<ToolEvent> = events.into();
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
-        ToolFeed::new(&queue, false, 0).render(area, &mut buf);
+        ToolFeed::new(&queue, false, 0).render(area, &mut buf, &palette());
         (0..height)
             .map(|y| {
                 (0..width)

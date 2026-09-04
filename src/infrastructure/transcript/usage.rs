@@ -1,35 +1,27 @@
-//! Adds up account-wide usage by reading every transcript, cheaply enough to
-//! do it while a dashboard is running.
+//! Account-wide usage, asked of the corpus as one question.
 //!
-//! The naive version of this re-reads 190-odd files on a timer, some of them
-//! close to a megabyte. Two things make that unnecessary:
+//! This used to walk the projects directory itself, decode every line and keep
+//! its own cache. All of that now lives in [`super::corpus`], behind the
+//! [`UsageRepository`] port, because it is not specific to *this* reading: the
+//! per-day, per-project and per-model reports want the same deduplicated
+//! stream of entries and would otherwise each have grown a scanner of their
+//! own, which is how two reports come to disagree about what a week cost.
 //!
-//! * **A transcript older than the widest window cannot contribute to it.** A
-//!   file last written eight days ago cannot hold a response from the last
-//!   seven days, because a response is written when it happens. Those files
-//!   are skipped without being opened at all, which on a machine with months
-//!   of history is nearly all of them.
-//! * **A transcript that has not changed yields what it yielded last time.**
-//!   Anything that has been read once is kept, keyed by the modification time
-//!   and size the catalogue reported; a file whose transcript grows is re-read,
-//!   and one that is untouched is not.
-//!
-//! What is kept per file is not the file: it is the handful of numbers per
-//! response that a usage window needs, already filtered to the window. A
-//! transcript's worth of prose is read once and thrown away.
-
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+//! What is left here is the one decision that genuinely belongs to this
+//! reading and to no other: **how far back to look**. That rule is expressed
+//! as a [`UsageQuery`], handed to the repository, and the answer is handed
+//! straight to [`AccountUsage::measure`]. The adapter is thin on purpose --
+//! everything it used to do was either a corpus concern or a domain rule, and
+//! neither belongs in a port implementation.
 
 use anyhow::Result;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 
-use super::records::Record;
-use crate::application::ports::{AccountUsageReader, TranscriptCatalog};
-use crate::domain::limits::{
-    AccountUsage, LimitEvent, SessionContribution, UsagePoint, WindowKind,
-};
-use crate::domain::model::ModelCatalog;
+use super::corpus::FileSystemUsageRepository;
+use crate::application::ports::{AccountUsageReader, TranscriptCatalog, UsageQuery};
+use crate::domain::limits::{AccountUsage, previous_month_start};
+use crate::domain::period::Zone;
+use crate::domain::pricing::PriceSheet;
 
 /// How far back the scanner looks.
 ///
@@ -43,178 +35,99 @@ use crate::domain::model::ModelCatalog;
 /// most of it, which is what keeps a scan of every session affordable.
 const HISTORY: chrono::Duration = chrono::Duration::days(28);
 
-/// What was learned from one transcript, and the file state it was learned at.
-#[derive(Debug, Clone)]
-struct CachedScan {
-    /// The modification time the catalogue reported when this was read.
-    modified_at: DateTime<Utc>,
-    /// The size it reported. Checked as well as the time, because a file can
-    /// be rewritten within the same second its timestamp records.
-    size_bytes: u64,
-    /// The responses, already trimmed to the history window.
-    points: Vec<UsagePoint>,
-    /// The refusals recorded in this transcript.
-    limit_events: Vec<LimitEvent>,
-}
-
-/// Scans every transcript on the filesystem, re-reading only what changed.
+/// Reads account-wide usage out of the corpus, re-reading only what changed.
+///
+/// Owns its repository rather than borrowing one because the caching is the
+/// whole point: a dashboard holds one of these for as long as it runs and asks
+/// it again every half a minute, and a repository handed in and thrown away
+/// per call would open every transcript on the machine each time.
 pub struct IncrementalUsageScanner<C> {
-    catalog: C,
-    cache: HashMap<PathBuf, CachedScan>,
+    corpus: FileSystemUsageRepository<C>,
+    /// The rates this reading is costed at.
+    ///
+    /// Held rather than looked up so that the account panel is priced by the
+    /// same sheet as every other figure in the run, including a user's own
+    /// corrections. Composed once at the composition root and handed in;
+    /// nothing here decides what a model costs.
+    prices: PriceSheet,
+    /// The calendar `AccountUsage::today` is bucketed on.
+    ///
+    /// Held for the same reason as `prices`: [`AccountUsage::measure`] needs
+    /// a [`Zone`] and this is the one place in the crate that is allowed to
+    /// decide what a live dashboard's "today" means, because it is the
+    /// composition root's own reader rather than a report that took a
+    /// `--timezone` flag of its own.
+    zone: Zone,
 }
 
 impl<C: TranscriptCatalog> IncrementalUsageScanner<C> {
-    /// A scanner over `catalog`, with nothing read yet.
-    pub fn new(catalog: C) -> Self {
+    /// A scanner over `catalog`, costed at `prices` and bucketing "today" on
+    /// `zone`, with nothing read yet.
+    pub fn new(catalog: C, prices: PriceSheet, zone: Zone) -> Self {
         Self {
-            catalog,
-            cache: HashMap::new(),
+            corpus: FileSystemUsageRepository::new(catalog),
+            prices,
+            zone,
         }
     }
 
-    /// Reads one transcript for the numbers a usage window needs.
+    /// The question this reading asks of the corpus, as of `now`.
     ///
-    /// Everything that is not a priced assistant response or a refusal is
-    /// skipped, including sub-agent traffic: a sub-agent's tokens are billed
-    /// to the account like any others, so unlike the per-session view they are
-    /// counted here rather than excluded.
-    fn scan_file(path: &Path, since: DateTime<Utc>) -> (Vec<UsagePoint>, Vec<LimitEvent>) {
-        let Ok(contents) = std::fs::read_to_string(path) else {
-            return (Vec::new(), Vec::new());
-        };
-
-        let mut points = Vec::new();
-        let mut events = Vec::new();
-        let mut model = String::new();
-
-        for line in contents.lines() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            let Ok(record) = serde_json::from_str::<Record>(line) else {
-                continue;
-            };
-
-            if let Some(event) = limit_event(&record) {
-                events.push(event);
-            }
-
-            if record.r#type != "assistant" {
-                continue;
-            }
-            let Some(message) = &record.message else {
-                continue;
-            };
-            if let Some(named) = &message.model {
-                model.clone_from(named);
-            }
-            let (Some(usage), Some(at)) = (message.usage, record.timestamp) else {
-                continue;
-            };
-            if at < since {
-                continue;
-            }
-            let tokens = usage.into();
-            points.push(UsagePoint {
-                at,
-                tokens,
-                cost: tokens.cost(ModelCatalog::pricing_for(&model)),
-            });
+    /// Only the lower bound is set. Everything else is left at its default,
+    /// which is to say: every project, every model, every session, and
+    /// sub-agent traffic included -- a sub-agent's tokens are charged to the
+    /// account exactly like the main thread's, and leaving them out would
+    /// under-report the bill several-fold rather than slightly.
+    ///
+    /// There is deliberately no upper bound. A window is closed by
+    /// [`AccountUsage::measure`] itself, and the busiest-window comparison
+    /// wants the whole scanned history rather than a truncated tail.
+    fn horizon(now: DateTime<Utc>) -> UsageQuery {
+        // Whichever reaches further back: the rolling-window history, or the
+        // start of the previous calendar month. The month totals need the
+        // latter, and near the start of a month it is up to ~62 days ago,
+        // which four weeks of history would silently truncate.
+        UsageQuery {
+            since: Some((now - HISTORY).min(previous_month_start(now))),
+            ..UsageQuery::default()
         }
-        (points, events)
     }
 }
 
 impl<C: TranscriptCatalog> AccountUsageReader for IncrementalUsageScanner<C> {
     fn usage(&mut self, now: DateTime<Utc>) -> Result<AccountUsage> {
-        let since = now - HISTORY;
-        let transcripts = self.catalog.list()?;
-
-        let mut contributions = Vec::new();
-        let mut limit_events = Vec::new();
-        let mut seen = Vec::with_capacity(transcripts.len());
-
-        for transcript in transcripts {
-            // Written before the history window opened, so nothing in it can
-            // fall inside one. Never opened.
-            if transcript.modified_at < since {
-                continue;
-            }
-            seen.push(transcript.path.clone());
-
-            let fresh = self.cache.get(&transcript.path).is_none_or(|cached| {
-                cached.modified_at != transcript.modified_at
-                    || cached.size_bytes != transcript.size_bytes
-            });
-            if fresh {
-                let (points, events) = Self::scan_file(&transcript.path, since);
-                self.cache.insert(
-                    transcript.path.clone(),
-                    CachedScan {
-                        modified_at: transcript.modified_at,
-                        size_bytes: transcript.size_bytes,
-                        points,
-                        limit_events: events,
-                    },
-                );
-            }
-
-            let Some(cached) = self.cache.get(&transcript.path) else {
-                continue;
-            };
-            limit_events.extend(cached.limit_events.iter().copied());
-            if !cached.points.is_empty() {
-                contributions.push(SessionContribution {
-                    session_id: transcript.session_id.clone(),
-                    points: cached.points.clone(),
-                });
-            }
-        }
-
-        // Drop transcripts that have aged out of the window, so a dashboard
-        // left running for a week does not accumulate them for ever.
-        self.cache.retain(|path, _| seen.contains(path));
+        // Entries and refusals in one pass, because they come out of the same
+        // lines of the same files and reading the corpus twice to separate
+        // them would double the cost of the only expensive thing this crate
+        // does.
+        let (entries, limit_events) = self.corpus.entries_and_limit_events(&Self::horizon(now))?;
 
         // The refusals go over raw. Collapsing them into distinct limit
         // periods is a rule about what a limit period is, so it belongs to the
         // domain -- see `LimitEvent::collapse_periods`, which `measure` calls.
-        Ok(AccountUsage::measure(now, &contributions, limit_events))
+        Ok(AccountUsage::measure(
+            now,
+            &entries,
+            limit_events,
+            &self.prices,
+            &self.zone,
+        ))
     }
-}
-
-/// The refusal a record describes, if it describes one.
-fn limit_event(record: &Record) -> Option<LimitEvent> {
-    let quota = record.quota_limits.as_ref()?;
-    if quota.status != "rejected" {
-        return None;
-    }
-    let resets_at = Utc.timestamp_opt(quota.resets_at?, 0).single()?;
-    let kind = match quota.rate_limit_type.as_deref()? {
-        "five_hour" => WindowKind::Session,
-        "weekly" => WindowKind::Week,
-        // An unfamiliar limit type is ignored rather than guessed at. Showing
-        // a countdown under the wrong heading would be worse than showing
-        // none.
-        _ => return None,
-    };
-    Some(LimitEvent {
-        at: record.timestamp?,
-        resets_at,
-        kind,
-    })
 }
 
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
+    use std::path::{Path, PathBuf};
     use std::rc::Rc;
 
     use super::*;
     use crate::application::ports::{SessionSelector, TranscriptRef};
+    use crate::domain::limits::WindowKind;
 
     /// A catalogue over real files in a temporary directory, which is the only
-    /// way to exercise the mtime/size caching the scanner is built around.
+    /// way to exercise the modification-time caching the reading is built
+    /// around.
     struct DirCatalog {
         dir: PathBuf,
         lists: Rc<Cell<u32>>,
@@ -226,6 +139,12 @@ mod tests {
         }
 
         fn list(&self) -> Result<Vec<TranscriptRef>> {
+            self.list_billable()
+        }
+
+        // The repository asks for the billable corpus, so the call counter the
+        // caching tests assert on has to live here rather than in `list`.
+        fn list_billable(&self) -> Result<Vec<TranscriptRef>> {
             self.lists.set(self.lists.get() + 1);
             let mut out = Vec::new();
             for entry in std::fs::read_dir(&self.dir)? {
@@ -251,19 +170,29 @@ mod tests {
         dir
     }
 
-    fn response(at: &str, input: u64) -> String {
+    /// One assistant response, spelled the way a transcript spells it.
+    ///
+    /// Both the session and the message id are written out rather than left to
+    /// the file name and a stand-in, because together they are what decides
+    /// whether two recorded rows are one charge or two. A fixture that left
+    /// either off would be exercising the fallbacks rather than the sum.
+    fn response(session: &str, id: &str, at: &str, input: u64) -> String {
         format!(
-            r#"{{"type":"assistant","timestamp":"{at}","message":{{"model":"claude-opus-5","content":[],"usage":{{"input_tokens":{input},"output_tokens":0}}}}}}"#
+            r#"{{"type":"assistant","sessionId":"{session}","requestId":"req-{id}","timestamp":"{at}","message":{{"id":"{id}","model":"claude-opus-5","content":[],"usage":{{"input_tokens":{input},"output_tokens":0}}}}}}"#
         )
     }
 
     fn scanner(dir: &Path) -> (IncrementalUsageScanner<DirCatalog>, Rc<Cell<u32>>) {
         let lists = Rc::new(Cell::new(0));
         (
-            IncrementalUsageScanner::new(DirCatalog {
-                dir: dir.to_path_buf(),
-                lists: Rc::clone(&lists),
-            }),
+            IncrementalUsageScanner::new(
+                DirCatalog {
+                    dir: dir.to_path_buf(),
+                    lists: Rc::clone(&lists),
+                },
+                PriceSheet::builtin(),
+                Zone::Utc,
+            ),
             lists,
         )
     }
@@ -273,8 +202,16 @@ mod tests {
         let dir = temp_dir("across");
         let now = Utc::now();
         let stamp = now.to_rfc3339();
-        std::fs::write(dir.join("a.jsonl"), response(&stamp, 100)).expect("write");
-        std::fs::write(dir.join("b.jsonl"), response(&stamp, 250)).expect("write");
+        std::fs::write(
+            dir.join("a.jsonl"),
+            response("session-a", "msg_a", &stamp, 100),
+        )
+        .expect("write");
+        std::fs::write(
+            dir.join("b.jsonl"),
+            response("session-b", "msg_b", &stamp, 250),
+        )
+        .expect("write");
 
         let (mut scanner, _) = scanner(&dir);
         let usage = scanner.usage(now).expect("a scan");
@@ -285,17 +222,54 @@ mod tests {
     }
 
     #[test]
+    fn the_same_response_recorded_in_two_transcripts_is_charged_for_once() {
+        // The correction this reading exists to carry: Claude Code copies a
+        // response into every transcript that replays the conversation it
+        // belongs to, so adding rows up counts one charge several times.
+        let dir = temp_dir("dedup");
+        let now = Utc::now();
+        let stamp = now.to_rfc3339();
+        // The same conversation, written down by two transcripts: one
+        // response, charged for once.
+        std::fs::write(
+            dir.join("a.jsonl"),
+            response("session-a", "msg_01", &stamp, 100),
+        )
+        .expect("write");
+        std::fs::write(
+            dir.join("b.jsonl"),
+            response("session-a", "msg_01", &stamp, 100),
+        )
+        .expect("write");
+
+        let (mut scanner, _) = scanner(&dir);
+        let usage = scanner.usage(now).expect("a scan");
+
+        assert_eq!(
+            usage.session.tokens.total(),
+            100,
+            "one response, however many transcripts recorded it"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn an_unchanged_transcript_is_not_read_a_second_time() {
         let dir = temp_dir("cache");
         let now = Utc::now();
         let path = dir.join("a.jsonl");
-        std::fs::write(&path, response(&now.to_rfc3339(), 100)).expect("write");
+        std::fs::write(
+            &path,
+            response("session-a", "msg_01", &now.to_rfc3339(), 100),
+        )
+        .expect("write");
 
         let (mut scanner, _) = scanner(&dir);
         scanner.usage(now).expect("first scan");
+        assert_eq!(scanner.corpus.transcripts_read(), 1);
 
-        // Replace the file's contents with a different number of the same
-        // byte length, then put the modification time back. The catalogue now
+        // Replace the file's contents with a different number of the same byte
+        // length, then put the modification time back. The catalogue now
         // reports exactly what it reported before, so as far as the cache key
         // is concerned nothing changed -- and the stale figure proves the file
         // was not opened again.
@@ -303,7 +277,11 @@ mod tests {
             .expect("metadata")
             .modified()
             .expect("mtime");
-        std::fs::write(&path, response(&now.to_rfc3339(), 999)).expect("rewrite");
+        std::fs::write(
+            &path,
+            response("session-a", "msg_01", &now.to_rfc3339(), 999),
+        )
+        .expect("rewrite");
         filetime_set(&path, before);
 
         let usage = scanner.usage(now).expect("second scan");
@@ -312,6 +290,7 @@ mod tests {
             100,
             "the cached figure was reused rather than the file re-read"
         );
+        assert_eq!(scanner.corpus.transcripts_read(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -320,18 +299,28 @@ mod tests {
         let dir = temp_dir("ancient");
         let now = Utc::now();
         let path = dir.join("old.jsonl");
-        std::fs::write(&path, response(&now.to_rfc3339(), 100)).expect("write");
+        std::fs::write(
+            &path,
+            response("session-a", "msg_01", &now.to_rfc3339(), 100),
+        )
+        .expect("write");
         // Backdate the file itself. Its contents claim to be from now, so if
         // the scanner opened it the tokens would be counted; the modification
         // time is what must keep it out.
-        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(60 * 60 * 24 * 30);
+        // Seventy days: past the four-week rolling history *and* past the
+        // start of the previous calendar month, which is at most ~62 days ago.
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(60 * 60 * 24 * 70);
         filetime_set(&path, old);
 
         let (mut scanner, _) = scanner(&dir);
         let usage = scanner.usage(now).expect("a scan");
 
         assert_eq!(usage.week.tokens.total(), 0);
-        assert!(scanner.cache.is_empty(), "it was never even cached");
+        assert_eq!(
+            scanner.corpus.transcripts_read(),
+            0,
+            "it was never even opened"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -376,12 +365,7 @@ mod tests {
         };
         std::fs::write(
             dir.join("a.jsonl"),
-            format!(
-                "{}
-{}",
-                refusal(10),
-                refusal(5)
-            ),
+            format!("{}\n{}", refusal(10), refusal(5)),
         )
         .expect("write");
         std::fs::write(dir.join("b.jsonl"), refusal(7)).expect("write");
@@ -419,6 +403,31 @@ mod tests {
 
         assert!(usage.limit_events.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_horizon_reaches_back_to_the_previous_month_when_that_is_further() {
+        // Early in a month, the start of the previous one is further back than
+        // four weeks, and the month totals would be missing their older half
+        // if the rolling history alone decided the floor.
+        let second_of_the_month = "2026-09-02T00:00:00Z"
+            .parse::<DateTime<Utc>>()
+            .expect("a valid timestamp");
+        let query = IncrementalUsageScanner::<DirCatalog>::horizon(second_of_the_month);
+
+        assert_eq!(
+            query.since,
+            Some(previous_month_start(second_of_the_month)),
+            "the first of August, not five days into it"
+        );
+        assert_eq!(
+            query.until, None,
+            "a window is closed by the domain, not here"
+        );
+        assert!(
+            query.include_sidechains,
+            "a sub-agent's tokens are charged to the account like any others"
+        );
     }
 
     /// Sets a file's modification time.

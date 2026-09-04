@@ -30,6 +30,24 @@ pub struct Record {
     #[serde(default)]
     pub timestamp: Option<DateTime<Utc>>,
 
+    /// Claude Code's own id for this line, distinct from the API's message id.
+    ///
+    /// Read only as a last-resort stand-in when a response carries no
+    /// `message.id`: it identifies the *row*, not the response, so two
+    /// transcripts holding the same response give it two different uuids. That
+    /// makes it useless for spotting duplicates and adequate for the one job
+    /// it is used for, which is giving an anonymous response a stable name.
+    #[serde(default)]
+    pub uuid: Option<String>,
+
+    /// The API request that produced this line, when the transcript names one.
+    ///
+    /// Part of a response's identity, because one message id can span several
+    /// requests when a response is retried or continued, and each of those
+    /// requests was billed separately.
+    #[serde(default, rename = "requestId")]
+    pub request_id: Option<String>,
+
     /// The assistant or user message body.
     #[serde(default)]
     pub message: Option<Message>,
@@ -86,6 +104,14 @@ pub struct QuotaLimits {
 /// The `message` object of an `assistant` or `user` entry.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Message {
+    /// The API's own id for this message, e.g. `msg_01ABC...`.
+    ///
+    /// The same value appears in every transcript that replays this response,
+    /// which is exactly what makes it usable for spotting a response that has
+    /// been written down more than once.
+    #[serde(default)]
+    pub id: Option<String>,
+
     /// The model that produced the message. Only assistant entries carry it.
     #[serde(default)]
     pub model: Option<String>,
@@ -218,18 +244,55 @@ pub struct Usage {
     pub input_tokens: u64,
     #[serde(default)]
     pub cache_read_input_tokens: u64,
+    /// Every token written into the cache, both leases together.
+    ///
+    /// Kept alongside [`Usage::cache_creation`] because it is the only figure
+    /// older transcripts carry, and because it is what the split must add up
+    /// to when both are present.
     #[serde(default)]
     pub cache_creation_input_tokens: u64,
+    /// The same tokens, broken down by how long a lease they took.
+    ///
+    /// Absent from transcripts written before Anthropic offered the one-hour
+    /// lease, which is why the flat counter above is still read.
+    #[serde(default)]
+    pub cache_creation: Option<CacheCreation>,
     #[serde(default)]
     pub output_tokens: u64,
 }
 
+/// The `cache_creation` breakdown, when the transcript carries one.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+pub struct CacheCreation {
+    #[serde(default)]
+    pub ephemeral_5m_input_tokens: u64,
+    #[serde(default)]
+    pub ephemeral_1h_input_tokens: u64,
+}
+
 impl From<Usage> for crate::domain::tokens::TokenUsage {
+    /// Converts the wire shape into the domain's counters.
+    ///
+    /// The two cache leases are priced 60% apart, so the breakdown is used
+    /// whenever the transcript offers one. When it does not -- an older
+    /// transcript with only the flat total -- the whole amount is attributed
+    /// to the five-minute lease. That is the conservative direction to guess
+    /// in: it is the cheaper rate, so a transcript too old to tell us cannot
+    /// silently inflate the bill, and the figure errs the same way the old
+    /// code did rather than in a new one.
     fn from(u: Usage) -> Self {
+        let (short_lease, long_lease) = match u.cache_creation {
+            Some(split) => (
+                split.ephemeral_5m_input_tokens,
+                split.ephemeral_1h_input_tokens,
+            ),
+            None => (u.cache_creation_input_tokens, 0),
+        };
         Self {
             input: u.input_tokens,
             cache_read: u.cache_read_input_tokens,
-            cache_creation: u.cache_creation_input_tokens,
+            cache_write_5m: short_lease,
+            cache_write_1h: long_lease,
             output: u.output_tokens,
         }
     }
@@ -281,5 +344,31 @@ mod tests {
         let usage: Usage = serde_json::from_str(r#"{"input_tokens":5}"#).unwrap();
         assert_eq!(usage.input_tokens, 5);
         assert_eq!(usage.output_tokens, 0);
+    }
+
+    #[test]
+    fn the_cache_write_breakdown_is_used_when_the_transcript_carries_one() {
+        use crate::domain::tokens::TokenUsage;
+
+        let usage: Usage = serde_json::from_str(
+            r#"{"cache_creation_input_tokens":1000,
+                "cache_creation":{"ephemeral_5m_input_tokens":250,
+                                  "ephemeral_1h_input_tokens":750}}"#,
+        )
+        .unwrap();
+        let tokens: TokenUsage = usage.into();
+        assert_eq!(tokens.cache_write_5m, 250);
+        assert_eq!(tokens.cache_write_1h, 750);
+        assert_eq!(tokens.cache_creation(), 1_000);
+    }
+
+    #[test]
+    fn an_older_transcript_without_the_breakdown_is_charged_the_cheaper_lease() {
+        use crate::domain::tokens::TokenUsage;
+
+        let usage: Usage = serde_json::from_str(r#"{"cache_creation_input_tokens":400}"#).unwrap();
+        let tokens: TokenUsage = usage.into();
+        assert_eq!(tokens.cache_write_5m, 400);
+        assert_eq!(tokens.cache_write_1h, 0);
     }
 }

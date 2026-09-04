@@ -15,7 +15,8 @@ use chrono::{DateTime, Utc};
 use super::records::{Block, Record};
 use crate::application::ports::{SessionReader, TranscriptRef};
 use crate::domain::activity::{ToolEvent, ToolKind};
-use crate::domain::model::ModelCatalog;
+use crate::domain::model::ModelId;
+use crate::domain::pricing::PriceSheet;
 use crate::domain::session::{
     CompactionEvent, EVENT_LOG_CAPACITY, LogEntry, LogLevel, RECENT_TOOL_CAPACITY, ResponseSample,
     SessionPhase, SessionSnapshot, TurnCounters,
@@ -31,8 +32,38 @@ const SUBJECT_MAX_CHARS: usize = 60;
 const ERROR_MAX_CHARS: usize = 200;
 
 /// Reads transcripts off the local filesystem.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct TranscriptParser;
+///
+/// Carries the price sheet the session is costed against rather than reaching
+/// for the compiled-in catalogue, because otherwise the two cost figures on
+/// one dashboard would come from two different sheets: the account panel from
+/// whatever the composition root composed, this session's own from the static
+/// table. A user who has corrected a rate would see the correction applied to
+/// one of them and not the other, with nothing on screen to explain the
+/// difference -- which is the exact confusion the sheet's provenance exists to
+/// prevent.
+#[derive(Debug, Clone)]
+pub struct TranscriptParser {
+    prices: PriceSheet,
+}
+
+impl TranscriptParser {
+    /// A parser that costs what it reads at `prices`.
+    #[must_use]
+    pub const fn new(prices: PriceSheet) -> Self {
+        Self { prices }
+    }
+}
+
+impl Default for TranscriptParser {
+    /// A parser on the rates this release shipped with.
+    ///
+    /// For callers with no composition root to ask -- the tests, and the
+    /// example probes -- rather than a licence to skip handing the run's own
+    /// sheet in.
+    fn default() -> Self {
+        Self::new(PriceSheet::builtin())
+    }
+}
 
 impl SessionReader for TranscriptParser {
     fn read(&self, transcript: &TranscriptRef) -> anyhow::Result<SessionSnapshot> {
@@ -41,11 +72,7 @@ impl SessionReader for TranscriptParser {
         // 2)" tells the reader nothing about which file went missing.
         let contents = std::fs::read_to_string(&transcript.path)
             .with_context(|| format!("reading transcript {}", transcript.path.display()))?;
-        Ok(Self::parse(
-            &transcript.path,
-            &transcript.session_id,
-            &contents,
-        ))
+        Ok(self.parse(&transcript.path, &transcript.session_id, &contents))
     }
 }
 
@@ -55,8 +82,8 @@ impl TranscriptParser {
     /// Exposed separately from [`SessionReader::read`] so the parsing rules
     /// can be tested against a string literal without touching the disk.
     #[must_use]
-    pub fn parse(path: &Path, session_id: &str, contents: &str) -> SessionSnapshot {
-        let mut state = ParseState::new(path.to_path_buf(), session_id.to_owned());
+    pub fn parse(&self, path: &Path, session_id: &str, contents: &str) -> SessionSnapshot {
+        let mut state = ParseState::new(path.to_path_buf(), session_id.to_owned(), &self.prices);
         for line in contents.lines() {
             let line = line.trim();
             if line.is_empty() {
@@ -75,8 +102,12 @@ impl TranscriptParser {
 }
 
 /// Everything the parser needs to remember between lines.
-struct ParseState {
+struct ParseState<'a> {
     snapshot: SessionSnapshot,
+    /// The rates this session is costed at. Borrowed rather than owned so that
+    /// a dashboard re-parsing its transcript every few seconds does not copy
+    /// the whole sheet each time.
+    prices: &'a PriceSheet,
     /// The turn number currently being filled in.
     current_turn: u32,
     /// Distinct `tool_use` ids for sub-agent spawns, so re-reads of the same
@@ -103,10 +134,11 @@ enum PendingLabel {
     Skill(String),
 }
 
-impl ParseState {
-    fn new(path: std::path::PathBuf, session_id: String) -> Self {
+impl<'a> ParseState<'a> {
+    fn new(path: std::path::PathBuf, session_id: String, prices: &'a PriceSheet) -> Self {
         Self {
             snapshot: SessionSnapshot::empty(path, session_id),
+            prices,
             current_turn: 0,
             subagent_ids: HashSet::new(),
             pending_labels: HashMap::new(),
@@ -295,8 +327,11 @@ impl ParseState {
         // session total at the end: a session that switched models would
         // otherwise bill all of its tokens at whichever model happened to be
         // recorded last.
-        self.snapshot.cost_accrued +=
-            usage.cost(ModelCatalog::pricing_for(&self.snapshot.model_id));
+        //
+        // A model the sheet has no row for is charged the sheet's fallback
+        // rather than nothing, because an uncatalogued model was still sold.
+        let answering = ModelId::new(self.snapshot.model_id.clone());
+        self.snapshot.cost_accrued += usage.cost(self.prices.pricing_or_fallback(&answering));
         let prompt_tokens = usage.prompt_tokens();
         self.last_context = prompt_tokens;
 
@@ -553,9 +588,14 @@ fn truncate(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::model::{ModelCatalog, ModelPricing};
+    use crate::domain::pricing::{PriceRow, Provenance};
 
     fn parse(lines: &[&str]) -> SessionSnapshot {
-        TranscriptParser::parse(Path::new("/tmp/s.jsonl"), "session-1", &lines.join("\n"))
+        // The rates this release shipped with, which is what these tests
+        // assert against; a run of the real binary hands in the sheet the
+        // composition root composed instead.
+        TranscriptParser::default().parse(Path::new("/tmp/s.jsonl"), "session-1", &lines.join("\n"))
     }
 
     const USER: &str = r#"{"type":"user","timestamp":"2026-08-23T10:00:00Z","message":{"content":"do the thing"}}"#;
@@ -646,6 +686,39 @@ mod tests {
             snapshot.context_window(),
             ModelCatalog::context_window_for("claude-opus-5"),
             "the gauge follows the model answering now, not the first one seen"
+        );
+    }
+
+    #[test]
+    fn a_session_is_costed_at_the_sheet_it_was_handed_rather_than_the_catalogue() {
+        // The whole point of an injectable sheet is that a user who corrects a
+        // rate sees the correction everywhere. Pricing this from the static
+        // catalogue instead would leave one dashboard showing a session cost
+        // at the shipped rates beside an account panel at the corrected ones,
+        // with nothing on screen to say why the two disagree.
+        let corrected = PriceSheet::builtin().overlaid_with(PriceSheet::from_rows(
+            vec![PriceRow {
+                id: "claude-opus-5".to_owned(),
+                display: "Opus 5".to_owned(),
+                context_window: 1_000_000,
+                pricing: ModelPricing::from_headline(9.0, 45.0),
+            }],
+            Provenance::Overridden {
+                source: "prices.json".to_owned(),
+            },
+        ));
+        let response = r#"{"type":"assistant","timestamp":"2026-08-23T10:00:01Z","message":{"model":"claude-opus-5","content":[],"usage":{"input_tokens":1000000,"output_tokens":0}}}"#;
+
+        let snapshot = TranscriptParser::new(corrected).parse(
+            Path::new("/tmp/s.jsonl"),
+            "session-1",
+            &[USER, response].join("\n"),
+        );
+
+        let cost = snapshot.cost().dollars();
+        assert!(
+            (cost - 9.0).abs() < 1e-9,
+            "a million input tokens at the user's own $9/MTok, got {cost}"
         );
     }
 

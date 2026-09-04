@@ -15,7 +15,7 @@ fn main() -> anyhow::Result<()> {
         println!("no transcript found");
         return Ok(());
     };
-    let s = TranscriptParser.read(&t)?;
+    let s = TranscriptParser::default().read(&t)?;
     println!("session      {}", s.session_id);
     println!("project      {:?}", s.project_dir);
     println!("branch       {:?}", s.git_branch);

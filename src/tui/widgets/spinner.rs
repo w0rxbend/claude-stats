@@ -11,7 +11,6 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::widgets::Widget;
 
 /// A cycle of frames to animate through.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,8 +85,16 @@ impl Spinner {
     }
 }
 
-impl Widget for Spinner {
-    fn render(self, area: Rect, buf: &mut Buffer) {
+impl Spinner {
+    /// Draws the spinner's current frame, or nothing if `area` has no room
+    /// for it.
+    ///
+    /// Takes no [`crate::tui::palette::Palette`], unlike every other widget
+    /// in this module: a spinner has no colour of its own -- [`Spinner::styled`]
+    /// already carries whatever colour the caller chose, usually a palette
+    /// role read at the call site -- so threading one through here would be a
+    /// parameter nothing inside this function would ever read.
+    pub fn render(self, area: Rect, buf: &mut Buffer) {
         if area.is_empty() {
             return;
         }

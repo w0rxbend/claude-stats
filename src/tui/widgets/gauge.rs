@@ -16,11 +16,10 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::widgets::Widget;
 
 use crate::domain::context::ContextFill;
 use crate::tui::icons::{EIGHTHS, Icon};
-use crate::tui::theme::Theme;
+use crate::tui::palette::Palette;
 
 /// A horizontal bar showing how full the context window is.
 #[derive(Debug, Clone, Copy)]
@@ -47,8 +46,12 @@ impl ContextGauge {
     }
 }
 
-impl Widget for ContextGauge {
-    fn render(self, area: Rect, buf: &mut Buffer) {
+impl ContextGauge {
+    /// Draws the gauge: the fill shaded along [`Palette::ramp`], the track
+    /// past the compaction threshold dimmed to `palette.faint`, and a
+    /// threshold tick in `palette.accent_secondary` while it is still ahead
+    /// of the fill.
+    pub fn render(self, area: Rect, buf: &mut Buffer, palette: &Palette) {
         if area.is_empty() {
             return;
         }
@@ -70,13 +73,13 @@ impl Widget for ContextGauge {
                 // Past the compaction threshold the track is dimmer still:
                 // that space exists in the window but will never be used.
                 let track = if cell >= threshold_cell {
-                    Theme::FAINT
+                    palette.faint.into()
                 } else {
-                    Theme::BORDER
+                    palette.border.into()
                 };
                 (Icon::BAR_EMPTY, track)
             } else {
-                (EIGHTHS[eighths_here - 1], Theme::ramp(position))
+                (EIGHTHS[eighths_here - 1], palette.ramp(position))
             };
 
             buf.set_string(x, row, symbol, Style::default().fg(colour));
@@ -91,7 +94,7 @@ impl Widget for ContextGauge {
                 area.x + threshold_cell as u16,
                 row,
                 Icon::MARKER,
-                Style::default().fg(Theme::VIOLET),
+                Style::default().fg(palette.accent_secondary.into()),
             );
         }
     }
@@ -101,14 +104,21 @@ impl Widget for ContextGauge {
 mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
-    use ratatui::widgets::Widget;
 
     use super::*;
+    use crate::tui::palette::registry::ThemeRegistry;
+
+    fn palette() -> Palette {
+        ThemeRegistry::builtin()
+            .get("aurora")
+            .expect("aurora is always registered")
+            .clone()
+    }
 
     fn render(fill: ContextFill, width: u16) -> Buffer {
         let area = Rect::new(0, 0, width, 1);
         let mut buf = Buffer::empty(area);
-        ContextGauge::new(fill).render(area, &mut buf);
+        ContextGauge::new(fill).render(area, &mut buf, &palette());
         buf
     }
 
@@ -153,6 +163,6 @@ mod tests {
     fn a_zero_width_area_is_not_drawn_into() {
         let area = Rect::new(0, 0, 0, 1);
         let mut buf = Buffer::empty(area);
-        ContextGauge::new(ContextFill::new(1, 2)).render(area, &mut buf);
+        ContextGauge::new(ContextFill::new(1, 2)).render(area, &mut buf, &palette());
     }
 }

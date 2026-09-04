@@ -290,6 +290,10 @@ mod tests {
         fn list(&self) -> Result<Vec<TranscriptRef>> {
             Ok(self.transcripts.clone())
         }
+
+        fn list_billable(&self) -> Result<Vec<TranscriptRef>> {
+            Ok(self.transcripts.clone())
+        }
     }
 
     /// A reader that counts how often it was asked to read, and can be told

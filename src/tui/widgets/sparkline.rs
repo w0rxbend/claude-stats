@@ -20,10 +20,9 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::widgets::Widget;
 
 use crate::tui::icons::{Icon, SPARK_LEVELS};
-use crate::tui::theme::Theme;
+use crate::tui::palette::Palette;
 
 /// A sparkline of output tokens per response.
 pub struct OutputSparkline<'a> {
@@ -81,8 +80,10 @@ struct Bucket {
     compacted: bool,
 }
 
-impl Widget for OutputSparkline<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
+impl OutputSparkline<'_> {
+    /// Draws the sparkline, ramping each column's colour by its share of the
+    /// tallest bar and marking compactions in `palette.accent_secondary`.
+    pub fn render(self, area: Rect, buf: &mut Buffer, palette: &Palette) {
         if area.is_empty() {
             return;
         }
@@ -100,11 +101,11 @@ impl Widget for OutputSparkline<'_> {
         for (index, bucket) in buckets.iter().enumerate() {
             let x = area.x + (offset + index) as u16;
             if bucket.compacted {
-                draw_compaction_marker(buf, x, area);
+                draw_compaction_marker(buf, x, area, palette);
                 continue;
             }
             let share = bucket.value as f64 / peak as f64;
-            let column_style = Style::default().fg(Theme::ramp(share));
+            let column_style = Style::default().fg(palette.ramp(share));
             // At least one eighth for any non-zero sample: a turn that
             // produced output must not render as though it produced none.
             let eighths = if bucket.value == 0 {
@@ -136,8 +137,8 @@ fn draw_column(buf: &mut Buffer, x: u16, area: Rect, eighths: usize, style: Styl
 /// between two segments of the chart, not a data point within one. Drawn as a
 /// rule, the eye reads the columns either side of it as separate runs, which
 /// is exactly what they are.
-fn draw_compaction_marker(buf: &mut Buffer, x: u16, area: Rect) {
-    let style = Style::default().fg(Theme::VIOLET);
+fn draw_compaction_marker(buf: &mut Buffer, x: u16, area: Rect, palette: &Palette) {
+    let style = Style::default().fg(palette.accent_secondary.into());
     for row in 0..area.height {
         let glyph = if row == 0 { Icon::MARKER } else { "\u{2502}" };
         buf.set_string(x, area.y + row, glyph, style);
@@ -147,6 +148,14 @@ fn draw_compaction_marker(buf: &mut Buffer, x: u16, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::palette::registry::ThemeRegistry;
+
+    fn palette() -> Palette {
+        ThemeRegistry::builtin()
+            .get("aurora")
+            .expect("aurora is always registered")
+            .clone()
+    }
 
     /// Renders into a one-row area and returns that row.
     fn render(values: &[u64], compactions: &[usize], width: u16) -> String {
@@ -157,7 +166,7 @@ mod tests {
     fn render_rows(values: &[u64], compactions: &[usize], width: u16, height: u16) -> Vec<String> {
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
-        OutputSparkline::new(values, compactions).render(area, &mut buf);
+        OutputSparkline::new(values, compactions).render(area, &mut buf, &palette());
         (0..height)
             .map(|y| {
                 (0..width)

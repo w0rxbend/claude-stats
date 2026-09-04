@@ -25,10 +25,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Padding, Paragraph, Widget};
 
-use crate::domain::limits::{AccountUsage, LimitEvent, WindowKind, WindowUsage};
+use crate::domain::limits::{AccountUsage, LimitEvent, MonthUsage, WindowKind, WindowUsage};
 use crate::tui::format;
 use crate::tui::icons::{EIGHTHS, Icon};
-use crate::tui::theme::Theme;
+use crate::tui::palette::Palette;
 
 /// Width of the `vs peak` bar. Narrow, because the figures beside it are the
 /// point and the bar is only there to give them a shape.
@@ -50,23 +50,25 @@ impl<'a> UsageWindows<'a> {
     }
 }
 
-impl Widget for UsageWindows<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
+impl UsageWindows<'_> {
+    /// Draws the panel: the session and weekly windows, the calendar-month
+    /// spend, and a limit banner when one is currently in force.
+    pub fn render(self, area: Rect, buf: &mut Buffer, palette: &Palette) {
         let limit = self.usage.active_limit();
         // A live limit sets the whole panel's colour: it is the one state here
         // that changes what the reader should do next.
-        let accent = if limit.is_some() {
-            Theme::CRIMSON
+        let accent: Color = if limit.is_some() {
+            palette.pressure_high.into()
         } else {
-            Theme::MAGENTA
+            palette.accent_special.into()
         };
 
         let block = Block::bordered()
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Theme::BORDER))
-            .style(Style::default().bg(Theme::SURFACE))
+            .border_style(Style::default().fg(palette.border.into()))
+            .style(Style::default().bg(palette.surface.into()))
             .padding(Padding::horizontal(1))
-            .title(Span::styled(" account usage ", Theme::title(accent)));
+            .title(Span::styled(" account usage ", palette.title(accent)));
         let inner = block.inner(area);
         block.render(area, buf);
         if inner.height == 0 {
@@ -76,7 +78,7 @@ impl Widget for UsageWindows<'_> {
         if !self.measured {
             Paragraph::new(Line::from(Span::styled(
                 "measuring recent usage...",
-                Style::default().fg(Theme::MUTED),
+                Style::default().fg(palette.muted.into()),
             )))
             .render(inner, buf);
             return;
@@ -89,25 +91,36 @@ impl Widget for UsageWindows<'_> {
             Layout::vertical([Constraint::Length(banner_rows), Constraint::Min(0)]).areas(inner);
 
         if let Some(limit) = limit {
-            Paragraph::new(limit_line(limit, self.usage.measured_at)).render(banner, buf);
+            Paragraph::new(limit_line(limit, self.usage.measured_at, palette)).render(banner, buf);
         }
 
         let mut lines = Vec::new();
-        lines.extend(window_lines(&self.usage.session, accent));
+        lines.extend(window_lines(&self.usage.session, accent, palette));
         if windows.height >= 4 {
             lines.push(Line::raw(""));
-            lines.extend(window_lines(&self.usage.week, Theme::AZURE));
+            lines.extend(window_lines(
+                &self.usage.week,
+                palette.accent_info.into(),
+                palette,
+            ));
+        }
+        if windows.height >= 6 {
+            lines.push(month_line(
+                &self.usage.this_month,
+                &self.usage.last_month,
+                palette,
+            ));
         }
         Paragraph::new(lines).render(windows, buf);
     }
 }
 
 /// The two lines describing one window: the bar, then the figures.
-fn window_lines(window: &WindowUsage, accent: Color) -> Vec<Line<'static>> {
+fn window_lines(window: &WindowUsage, accent: Color, palette: &Palette) -> Vec<Line<'static>> {
     let headline = Line::from(vec![
         Span::styled(
             format!("{} {:<8}", Icon::CLOCK, window.kind.span_label()),
-            Theme::label(),
+            palette.label(),
         ),
         Span::styled(bar(window.share_of_peak()), Style::default().fg(accent)),
         Span::raw(" "),
@@ -125,7 +138,10 @@ fn window_lines(window: &WindowUsage, accent: Color) -> Vec<Line<'static>> {
     );
     let mut spans = vec![
         Span::raw("           "),
-        Span::styled(format!("{}", window.cost), Style::default().fg(Theme::CYAN)),
+        Span::styled(
+            format!("{}", window.cost),
+            Style::default().fg(palette.accent_primary.into()),
+        ),
         Span::styled(
             format!(
                 "  {} {} session{}",
@@ -133,11 +149,11 @@ fn window_lines(window: &WindowUsage, accent: Color) -> Vec<Line<'static>> {
                 window.sessions,
                 if window.sessions == 1 { "" } else { "s" }
             ),
-            Style::default().fg(Theme::MUTED),
+            Style::default().fg(palette.muted.into()),
         ),
         Span::styled(
             format!("  {} {comparison}", Icon::SEPARATOR),
-            Style::default().fg(Theme::FAINT),
+            Style::default().fg(palette.faint.into()),
         ),
     ];
 
@@ -153,7 +169,7 @@ fn window_lines(window: &WindowUsage, accent: Color) -> Vec<Line<'static>> {
                 if window.limit_periods == 1 { "" } else { "s" }
             ),
             Style::default()
-                .fg(Theme::AMBER)
+                .fg(palette.pressure_low.into())
                 .add_modifier(Modifier::BOLD),
         ));
     }
@@ -161,8 +177,55 @@ fn window_lines(window: &WindowUsage, accent: Color) -> Vec<Line<'static>> {
     vec![headline, Line::from(spans)]
 }
 
+/// The calendar-month spend: what this month has cost so far, next to what
+/// the whole of last month cost, which is the only comparison that says
+/// whether the current pace is unusual.
+fn month_line(
+    this_month: &MonthUsage,
+    last_month: &MonthUsage,
+    palette: &Palette,
+) -> Line<'static> {
+    let mut spans = vec![
+        Span::styled(
+            format!("{} {:<8}", Icon::COST, this_month.name()),
+            palette.label(),
+        ),
+        Span::styled(
+            format!("{}", this_month.cost),
+            Style::default()
+                .fg(palette.accent_primary.into())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(
+                "  {} {}",
+                Icon::SEPARATOR,
+                format::tokens(this_month.tokens.total())
+            ),
+            Style::default().fg(palette.muted.into()),
+        ),
+    ];
+    if last_month.tokens.total() > 0 {
+        spans.push(Span::styled(
+            format!(
+                "  {} {} {} ({})",
+                Icon::SEPARATOR,
+                last_month.name(),
+                last_month.cost,
+                format::tokens(last_month.tokens.total()),
+            ),
+            Style::default().fg(palette.faint.into()),
+        ));
+    }
+    Line::from(spans)
+}
+
 /// The banner shown while a limit is actually in force.
-fn limit_line(limit: LimitEvent, now: chrono::DateTime<chrono::Utc>) -> Line<'static> {
+fn limit_line(
+    limit: LimitEvent,
+    now: chrono::DateTime<chrono::Utc>,
+    palette: &Palette,
+) -> Line<'static> {
     let remaining = limit
         .time_until_reset(now)
         .map_or_else(|| "any moment".to_owned(), format::duration);
@@ -174,12 +237,12 @@ fn limit_line(limit: LimitEvent, now: chrono::DateTime<chrono::Utc>) -> Line<'st
         Span::styled(
             format!("{} {what}", Icon::ERROR),
             Style::default()
-                .fg(Theme::CRIMSON)
+                .fg(palette.pressure_high.into())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("  {} resets in {remaining}", Icon::SEPARATOR),
-            Style::default().fg(Theme::AMBER),
+            Style::default().fg(palette.pressure_low.into()),
         ),
     ])
 }
@@ -209,9 +272,20 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use super::*;
-    use crate::domain::limits::{SessionContribution, UsagePoint};
-    use crate::domain::money::Usd;
+    use crate::domain::entry::{Entry, EntryId};
+    use crate::domain::model::ModelId;
+    use crate::domain::period::Zone;
+    use crate::domain::pricing::PriceSheet;
+    use crate::domain::project::{Project, SessionId};
     use crate::domain::tokens::TokenUsage;
+    use crate::tui::palette::registry::ThemeRegistry;
+
+    fn palette() -> Palette {
+        ThemeRegistry::builtin()
+            .get("aurora")
+            .expect("aurora is always registered")
+            .clone()
+    }
 
     fn now() -> DateTime<Utc> {
         Utc.timestamp_opt(1_700_000_000, 0)
@@ -219,22 +293,43 @@ mod tests {
             .expect("a time")
     }
 
-    fn point(minutes_ago: i64, tokens: u64) -> UsagePoint {
-        UsagePoint {
+    /// One billable response in session `a`, `minutes_ago` before [`now`].
+    ///
+    /// Priced as Opus 5 input, which is $5 per million tokens, so a figure on
+    /// screen can be checked against the token count beside it with nothing
+    /// more than arithmetic. The panel no longer carries a cost handed to it:
+    /// [`AccountUsage::measure`] recomputes from the counters and the price
+    /// sheet, so a correction to the catalogue corrects the panel too.
+    fn entry(minutes_ago: i64, tokens: u64) -> Entry {
+        Entry {
+            id: EntryId {
+                message_id: format!("msg-{minutes_ago}-{tokens}"),
+                request_id: None,
+                session: SessionId::new("a"),
+            },
             at: now() - chrono::Duration::minutes(minutes_ago),
+            model: ModelId::new("claude-opus-5"),
             tokens: TokenUsage {
                 input: tokens,
                 ..TokenUsage::ZERO
             },
-            cost: Usd::new(3.5),
+            recorded_cost: None,
+            session: SessionId::new("a"),
+            project: Project::new("/home/ada/api"),
+            is_sidechain: false,
         }
     }
 
     fn render(usage: &AccountUsage, measured: bool, width: u16, height: u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("a test terminal");
+        let palette = palette();
         terminal
             .draw(|frame| {
-                frame.render_widget(UsageWindows::new(usage, measured), frame.area());
+                UsageWindows::new(usage, measured).render(
+                    frame.area(),
+                    frame.buffer_mut(),
+                    &palette,
+                );
             })
             .expect("a frame");
         let buffer = terminal.backend().buffer().clone();
@@ -252,11 +347,10 @@ mod tests {
     fn both_windows_and_their_costs_are_shown() {
         let usage = AccountUsage::measure(
             now(),
-            &[SessionContribution {
-                session_id: "a".to_owned(),
-                points: vec![point(30, 400_000), point(60 * 24 * 3, 100_000)],
-            }],
+            &[entry(30, 400_000), entry(60 * 24 * 3, 100_000)],
             Vec::new(),
+            &PriceSheet::builtin(),
+            &Zone::Utc,
         );
         let out = render(&usage, true, 70, 8);
 
@@ -268,15 +362,57 @@ mod tests {
     }
 
     #[test]
+    fn the_month_spend_is_shown_next_to_the_previous_months() {
+        // 1_700_000_000 is 2023-11-14, so "last month" is October. Give it a
+        // point (44 days ago lands mid-October) and check both figures appear.
+        let usage = AccountUsage::measure(
+            now(),
+            &[entry(30, 400_000), entry(60 * 24 * 44, 100_000)],
+            Vec::new(),
+            &PriceSheet::builtin(),
+            &Zone::Utc,
+        );
+        let out = render(&usage, true, 90, 9);
+
+        assert!(out.contains("November"), "the current month is named");
+        assert!(
+            out.contains("October"),
+            "and the previous one for comparison"
+        );
+        assert!(
+            out.contains("$2.00"),
+            "400k Opus 5 input tokens this month, at $5 per million"
+        );
+        assert!(out.contains("$0.50"), "and 100k of them last month");
+    }
+
+    #[test]
+    fn an_empty_previous_month_is_not_printed_as_a_zero() {
+        let usage = AccountUsage::measure(
+            now(),
+            &[entry(30, 400_000)],
+            Vec::new(),
+            &PriceSheet::builtin(),
+            &Zone::Utc,
+        );
+        let out = render(&usage, true, 90, 9);
+
+        assert!(out.contains("November"));
+        assert!(
+            !out.contains("October"),
+            "nothing was scanned for October, so nothing is claimed about it"
+        );
+    }
+
+    #[test]
     fn no_percentage_of_any_limit_is_claimed() {
         // The panel must never imply it knows the account's real ceiling.
         let usage = AccountUsage::measure(
             now(),
-            &[SessionContribution {
-                session_id: "a".to_owned(),
-                points: vec![point(30, 400_000)],
-            }],
+            &[entry(30, 400_000)],
             Vec::new(),
+            &PriceSheet::builtin(),
+            &Zone::Utc,
         );
         let out = render(&usage, true, 70, 8).to_lowercase();
 
@@ -292,7 +428,8 @@ mod tests {
             resets_at: now() + chrono::Duration::minutes(42),
             kind: WindowKind::Session,
         };
-        let usage = AccountUsage::measure(now(), &[], vec![limit]);
+        let usage =
+            AccountUsage::measure(now(), &[], vec![limit], &PriceSheet::builtin(), &Zone::Utc);
         let out = render(&usage, true, 70, 8);
 
         assert!(out.contains("session limit reached"));
@@ -311,7 +448,8 @@ mod tests {
             resets_at: now() - chrono::Duration::hours(2),
             kind: WindowKind::Session,
         };
-        let usage = AccountUsage::measure(now(), &[], vec![limit]);
+        let usage =
+            AccountUsage::measure(now(), &[], vec![limit], &PriceSheet::builtin(), &Zone::Utc);
         let out = render(&usage, true, 90, 8);
 
         assert!(out.contains("1 limit"), "counted in the five-hour window");
@@ -328,7 +466,8 @@ mod tests {
             resets_at: now() - chrono::Duration::hours(4),
             kind: WindowKind::Session,
         };
-        let usage = AccountUsage::measure(now(), &[], vec![limit]);
+        let usage =
+            AccountUsage::measure(now(), &[], vec![limit], &PriceSheet::builtin(), &Zone::Utc);
         let out = render(&usage, true, 70, 8);
 
         assert!(!out.contains("limit reached"));

@@ -2,13 +2,20 @@
 //! terminal. Handy for checking the scanner against a real machine's history.
 
 use chrono::Utc;
-use claude_stats::application::ports::AccountUsageReader;
+use claude_stats::application::ports::{AccountUsageReader, PriceSheetSource};
 use claude_stats::domain::limits::WindowUsage;
+use claude_stats::domain::period::Zone;
+use claude_stats::infrastructure::pricing::source::BuiltinPriceSource;
 use claude_stats::infrastructure::transcript::locator::FileSystemCatalog;
 use claude_stats::infrastructure::transcript::usage::IncrementalUsageScanner;
 
 fn main() -> anyhow::Result<()> {
-    let mut scanner = IncrementalUsageScanner::new(FileSystemCatalog::from_home()?);
+    // The same sheet the real binary composes, so a probe against a real
+    // machine's history reports the figures that machine's dashboard would --
+    // including any rate the user has corrected for themselves.
+    let prices = BuiltinPriceSource::from_config_dir()?.sheet()?;
+    let mut scanner =
+        IncrementalUsageScanner::new(FileSystemCatalog::from_home()?, prices, Zone::Local);
 
     let started = std::time::Instant::now();
     let usage = scanner.usage(Utc::now())?;

@@ -10,12 +10,12 @@
 //! cheap session. One dominated by output is an expensive one, and the chart
 //! says so before the invoice does.
 
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, BorderType, Widget};
 use tui_piechart::{LegendPosition, PieChart, PieSlice, Resolution};
 
 use crate::domain::tokens::TokenUsage;
-use crate::tui::theme::Theme;
+use crate::tui::palette::Palette;
 
 /// A pie chart of the four token kinds.
 pub struct TokenMix {
@@ -39,32 +39,46 @@ impl TokenMix {
     /// Zero-valued slices are dropped rather than drawn as a hairline, which
     /// would otherwise clutter the legend of a session that has not yet
     /// written anything to the cache.
-    fn slices(&self) -> Vec<PieSlice<'static>> {
+    fn slices(&self, palette: &Palette) -> Vec<PieSlice<'static>> {
+        let colours: [Color; 4] = [
+            palette.accent_primary.into(),
+            palette.accent_secondary.into(),
+            palette.accent_info.into(),
+            palette.pressure_low.into(),
+        ];
         [
-            ("cache read", self.usage.cache_read, Theme::CYAN),
-            ("cache write", self.usage.cache_creation, Theme::VIOLET),
-            ("input", self.usage.input, Theme::AZURE),
-            ("output", self.usage.output, Theme::AMBER),
+            ("cache read", self.usage.cache_read),
+            ("cache write", self.usage.cache_creation()),
+            ("input", self.usage.input),
+            ("output", self.usage.output),
         ]
         .into_iter()
-        .filter(|(_, value, _)| *value > 0)
-        .map(|(label, value, colour)| PieSlice::new(label, value as f64, colour))
+        .zip(colours)
+        .filter(|((_, value), _)| *value > 0)
+        .map(|((label, value), colour)| PieSlice::new(label, value as f64, colour))
         .collect()
     }
 }
 
-impl Widget for TokenMix {
-    fn render(self, area: ratatui::layout::Rect, buf: &mut ratatui::buffer::Buffer) {
+impl TokenMix {
+    /// Draws the pie chart, or an empty titled frame while nothing has been
+    /// billed yet.
+    pub fn render(
+        self,
+        area: ratatui::layout::Rect,
+        buf: &mut ratatui::buffer::Buffer,
+        palette: &Palette,
+    ) {
         let block = Block::bordered()
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Theme::BORDER))
-            .style(Style::default().bg(Theme::SURFACE))
+            .border_style(Style::default().fg(palette.border.into()))
+            .style(Style::default().bg(palette.surface.into()))
             .title(ratatui::text::Span::styled(
                 " token mix ",
-                Theme::title(Theme::VIOLET),
+                palette.title(palette.accent_secondary.into()),
             ));
 
-        let slices = self.slices();
+        let slices = self.slices(palette);
         if slices.is_empty() {
             // Nothing has been billed yet. The empty frame still holds the
             // space, so the layout does not jump when the first response lands.
@@ -74,7 +88,11 @@ impl Widget for TokenMix {
 
         PieChart::new(slices)
             .block(block)
-            .style(Style::default().bg(Theme::SURFACE).fg(Theme::TEXT))
+            .style(
+                Style::default()
+                    .bg(palette.surface.into())
+                    .fg(palette.text.into()),
+            )
             .resolution(Resolution::Braille)
             .legend_position(LegendPosition::Right)
             .show_percentages(true)
@@ -85,17 +103,26 @@ impl Widget for TokenMix {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::palette::registry::ThemeRegistry;
+
+    fn palette() -> Palette {
+        ThemeRegistry::builtin()
+            .get("aurora")
+            .expect("aurora is always registered")
+            .clone()
+    }
 
     #[test]
     fn slices_keep_a_fixed_order_regardless_of_their_sizes() {
         let mix = TokenMix::new(TokenUsage {
             input: 1,
             cache_read: 1_000_000,
-            cache_creation: 5,
+            cache_write_5m: 3,
+            cache_write_1h: 2,
             output: 50,
         });
         let labels: Vec<&str> = mix
-            .slices()
+            .slices(&palette())
             .iter()
             .map(tui_piechart::PieSlice::label)
             .collect();
@@ -107,11 +134,12 @@ mod tests {
         let mix = TokenMix::new(TokenUsage {
             input: 10,
             cache_read: 0,
-            cache_creation: 0,
+            cache_write_5m: 0,
+            cache_write_1h: 0,
             output: 5,
         });
         let labels: Vec<&str> = mix
-            .slices()
+            .slices(&palette())
             .iter()
             .map(tui_piechart::PieSlice::label)
             .collect();
@@ -122,6 +150,6 @@ mod tests {
     fn an_unused_session_draws_an_empty_frame_rather_than_panicking() {
         let area = ratatui::layout::Rect::new(0, 0, 24, 10);
         let mut buf = ratatui::buffer::Buffer::empty(area);
-        TokenMix::new(TokenUsage::ZERO).render(area, &mut buf);
+        TokenMix::new(TokenUsage::ZERO).render(area, &mut buf, &palette());
     }
 }

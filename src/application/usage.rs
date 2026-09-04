@@ -108,8 +108,11 @@ mod tests {
     use chrono::{DateTime, TimeZone, Utc};
 
     use super::*;
-    use crate::domain::limits::{SessionContribution, UsagePoint};
-    use crate::domain::money::Usd;
+    use crate::domain::entry::{Entry, EntryId};
+    use crate::domain::model::ModelId;
+    use crate::domain::period::Zone;
+    use crate::domain::pricing::PriceSheet;
+    use crate::domain::project::{Project, SessionId};
     use crate::domain::tokens::TokenUsage;
 
     struct FixedClock(DateTime<Utc>);
@@ -133,18 +136,26 @@ mod tests {
             }
             Ok(AccountUsage::measure(
                 now,
-                &[SessionContribution {
-                    session_id: "a".to_owned(),
-                    points: vec![UsagePoint {
-                        at: now,
-                        tokens: TokenUsage {
-                            input: 500,
-                            ..TokenUsage::ZERO
-                        },
-                        cost: Usd::new(2.0),
-                    }],
+                &[Entry {
+                    id: EntryId {
+                        message_id: "msg_01".to_owned(),
+                        request_id: Some("req_01".to_owned()),
+                        session: SessionId::new("a"),
+                    },
+                    at: now,
+                    model: ModelId::new("claude-opus-5"),
+                    tokens: TokenUsage {
+                        input: 500,
+                        ..TokenUsage::ZERO
+                    },
+                    recorded_cost: None,
+                    session: SessionId::new("a"),
+                    project: Project::new("/home/ada/api"),
+                    is_sidechain: false,
                 }],
                 Vec::new(),
+                &PriceSheet::builtin(),
+                &Zone::Utc,
             ))
         }
     }

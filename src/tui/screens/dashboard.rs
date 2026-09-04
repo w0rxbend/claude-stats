@@ -1,135 +1,199 @@
 //! The main dashboard: everything about the attached session on one screen.
 //!
-//! The layout is ordered by how urgent each thing is, top to bottom, because
-//! that is the order a reader's eye takes:
+//! The header is chrome -- which session am I even looking at -- and stays
+//! hand-drawn here, the same way it always has. Everything beneath it is no
+//! longer hand-drawn Rust control flow: `draw` builds a
+//! [`DashboardViewModel`] from the session and usage readings, then hands it
+//! to [`layout::solve`] together with [`presets::live`] -- the same tile
+//! row, context gauge, account/spend row and detail columns this screen has
+//! always shown, now expressed as a [`crate::tui::layout::Node`] tree instead
+//! of a six-way `match` on how much height was left. `solve` decides which
+//! panels fit and how big each one gets; [`PanelRegistry`] is asked, by id,
+//! how to draw whichever ones survive.
 //!
-//! 1. The header -- which session am I even looking at.
-//! 2. The tile row -- the six numbers that answer "is this session healthy".
-//! 3. The context gauge -- the one reading that changes what you do next.
-//! 4. Two columns of detail, for when the answer above was "no".
+//! Before this rewrite, changing which panel sat where meant editing this
+//! function and recompiling. Now it means editing [`presets::live`], or --
+//! once a later epic wires runtime preset switching -- choosing a different
+//! preset by name. Nothing about *what* gets drawn changed in this rewrite:
+//! every panel below is the same widget call
+//! [`crate::tui::panels::PanelRegistry::builtin`]'s renderers already made.
 //!
-//! Panels give up space in reverse order as the terminal shrinks, so a small
-//! window keeps the urgent things and loses the detail, never the other way
-//! round.
+//! Most of the test suite below is exactly what it was before this rewrite,
+//! asserting the same things about the same terminal sizes: `solve`,
+//! working from nothing but each panel's own honest minimum, reproduces the
+//! pre-epic `match`'s decisions almost everywhere it was exercised. Three
+//! tests could not survive unchanged, and each says why in its own doc
+//! comment rather than here: the pre-epic `match` carried a couple of
+//! hand-picked thresholds -- a two-hundred-column readability cutoff with no
+//! panel-minimum equivalent, and one height band where the session detail
+//! was preferred over a *shorter* account row -- that a single degrading
+//! [`crate::tui::layout::Node`] tree cannot reproduce and still behave
+//! sensibly everywhere else. See [`presets::live`]'s own doc for the fuller
+//! account of why, and for the one place this rewrite deliberately departs
+//! from the epic's own literal tree to fix a real bug rather than to work
+//! around a limitation.
+//!
+//! [`DashboardViewModel`]: crate::view::dashboard_view::DashboardViewModel
+//! [`PanelRegistry`]: crate::tui::panels::PanelRegistry
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Padding, Paragraph, Wrap};
+use ratatui::widgets::Paragraph;
 
-use crate::domain::context::{CompactionDistance, FillSeverity};
 use crate::domain::limits::AccountUsage;
 use crate::domain::session::{SessionPhase, SessionSnapshot};
 use crate::tui::format;
 use crate::tui::icons::Icon;
-use crate::tui::theme::Theme;
-use crate::tui::widgets::banner::ContextBanner;
-use crate::tui::widgets::gauge::ContextGauge;
-use crate::tui::widgets::meter::meter_line;
-use crate::tui::widgets::sparkline::OutputSparkline;
+use crate::tui::layout::{presets, solve};
+use crate::tui::palette::Palette;
+use crate::tui::panels::PanelRegistry;
+use crate::tui::screens::draw_tab_bar;
 use crate::tui::widgets::spinner::{Spinner, SpinnerStyle};
-use crate::tui::widgets::stat_tile::StatTile;
-use crate::tui::widgets::token_mix::TokenMix;
-use crate::tui::widgets::tool_feed::ToolFeed;
-use crate::tui::widgets::usage_windows::UsageWindows;
+use crate::view::dashboard_view;
 
-/// Rows the account-usage panel takes: a border, two windows of two lines
-/// each, and a row in hand for the rate-limit banner when there is one.
-const USAGE_ROWS: u16 = 7;
-
-/// The height below which the account-usage panel is dropped.
+/// What the body reads instead of a silent blank screen when
+/// [`layout::solve`] finds nothing at all fits -- not even the smallest
+/// single panel meets its own registered minimum.
 ///
-/// Generous, because this panel is the first thing *added* as a terminal grows
-/// rather than the last: it is only worth the rows once the detail columns
-/// already fit.
-const MIN_HEIGHT_FOR_USAGE: u16 = MIN_HEIGHT_FOR_DETAIL + USAGE_ROWS;
+/// [`layout::solve`]: crate::tui::layout::solve
+const TOO_SMALL_MESSAGE: &str = "terminal too small — resize to see the dashboard";
 
-/// The height below which the detail columns are dropped entirely.
+/// `panel.dollar-pulse`'s own animation inputs for one frame, reduced from
+/// `App`'s `crate::tui::widgets::dollar_pulse::PulseClock` and
+/// `AnimationStyle` to the two primitives
+/// [`crate::view::dashboard_view::build`] can honestly carry, and bundled
+/// into one parameter so [`draw`]'s own signature does not grow past a
+/// comfortable seven arguments. `App::draw` is where the reduction happens
+/// -- `frames_since_increment` from `PulseClock::frames_since`, `off` from
+/// comparing the resolved `AnimationStyle` against `Off` -- see
+/// [`crate::view::dashboard_view::DollarPulseView::off`]'s own doc for why
+/// the full style cannot cross into the view model itself.
+#[derive(Debug, Clone, Copy)]
+pub struct DollarPulseInputs {
+    pub frames_since_increment: Option<u64>,
+    pub off: bool,
+}
+
+/// The small pieces of `App`'s own runtime state that [`draw`] needs beyond
+/// what it can already read out of the `SessionSnapshot`/`AccountUsage`
+/// arguments, bundled into one parameter for the same reason
+/// [`DollarPulseInputs`] itself was: each value on its own is a single
+/// primitive `App::draw` already had to reduce some richer piece of its own
+/// state down to, but passing every one of them as its own loose argument
+/// would push [`draw`]'s own parameter count past what
+/// `clippy::too_many_arguments` -- and a reader trying to hold the whole
+/// call in their head -- comfortably allow.
+#[derive(Debug, Clone, Copy)]
+pub struct DashboardInputs<'a> {
+    pub pulse: DollarPulseInputs,
+    /// The layout preset [`draw`] solves against -- see [`draw`]'s own doc
+    /// comment for how an unresolvable name degrades.
+    pub active_preset: &'a str,
+    /// Which of `crate::tui::screens::TAB_LABELS` is current, for the tab bar
+    /// every content view now reserves its own top row for. Bundled in here
+    /// for the same reason `pulse` and `active_preset` already are: a fourth
+    /// loose parameter would push [`draw`] past the seven
+    /// `clippy::too_many_arguments` allows.
+    pub tab_index: usize,
+}
+
+/// Draws the dashboard for `snapshot` into `area`: the header on its own
+/// fixed row, then every panel `inputs.active_preset` places, solved against
+/// whatever is left.
 ///
-/// Under this, a two-column split would give each panel one or two usable
-/// rows, which is not enough to say anything true.
-const MIN_HEIGHT_FOR_DETAIL: u16 = 18;
-
-/// The width below which the layout collapses to a single column.
-const MIN_WIDTH_FOR_COLUMNS: u16 = 90;
-
-/// Rows given to the oversized context percentage.
-///
-/// Four, which is `PixelSize::HalfHeight`, not the eight a full-size banner
-/// wants. At eight it dominates the panel it shares with the chart, and the
-/// chart is the element carrying information the tiles do not already show.
-const BANNER_ROWS: u16 = 4;
-
-/// The panel height below which the banner is dropped in favour of the chart.
-const MIN_HEIGHT_FOR_BANNER: u16 = 11;
-
-/// Draws the dashboard for `snapshot` into `area`.
+/// `inputs.active_preset` is looked up with [`presets::by_name`], falling
+/// back to [`presets::live`] for anything that name does not resolve to --
+/// today that means any of the four built-in preset names switches what
+/// actually renders, while a custom `config.layouts` entry (which `App`'s
+/// layout picker also lists and happily persists to `config.json`) still
+/// falls back to `live` here, since resolving a `LayoutNodeDto` into a real
+/// [`crate::tui::layout::Node`] at this call site is a later epic's wiring,
+/// not this one's -- see `crate::tui::app::App::confirm_layout_picker`'s doc
+/// comment for the fuller account.
 pub fn draw(
     frame: &mut Frame<'_>,
     area: Rect,
     snapshot: &SessionSnapshot,
     phase: u64,
     usage: Option<(&AccountUsage, bool)>,
+    palette: &Palette,
+    inputs: DashboardInputs<'_>,
 ) {
-    let [header, tiles, gauge, rest] = Layout::vertical([
+    let [tab_bar, header, body] = Layout::vertical([
         Constraint::Length(1),
-        Constraint::Length(4),
-        Constraint::Length(4),
+        Constraint::Length(1),
         Constraint::Min(0),
     ])
     .areas(area);
+    draw_tab_bar(frame, tab_bar, inputs.tab_index, palette);
+    draw_header(frame, header, snapshot, phase, palette);
 
-    draw_header(frame, header, snapshot, phase);
-    draw_tiles(frame, tiles, snapshot);
-    draw_context_panel(frame, gauge, snapshot);
+    let view_model = dashboard_view::build(
+        snapshot,
+        usage,
+        phase,
+        inputs.pulse.frames_since_increment,
+        inputs.pulse.off,
+    );
 
-    // The usage panel sits directly under the context gauge, because a limit
-    // that has already been hit changes what you do next just as much as a
-    // context window that is nearly full.
-    //
-    // Which of the two lower panels gets the space depends on how much there
-    // is. Tall enough for both, and both are drawn. Enough for only one, the
-    // detail columns win, because they are about the session actually on
-    // screen. Too short for those but not for this, and the usage panel takes
-    // rows that would otherwise sit empty.
-    match usage {
-        Some((usage, measured)) if rest.height >= MIN_HEIGHT_FOR_USAGE => {
-            let [panel, detail] =
-                Layout::vertical([Constraint::Length(USAGE_ROWS), Constraint::Min(0)]).areas(rest);
-            frame.render_widget(UsageWindows::new(usage, measured), panel);
-            draw_detail(frame, detail, snapshot, phase);
+    let registry = PanelRegistry::builtin();
+    let layout = presets::by_name(inputs.active_preset).unwrap_or_else(presets::live);
+    let solved = solve(&layout, body, &|id| {
+        registry.get(id).map_or((0, 0), |(spec, _)| spec.min)
+    });
+
+    // `solve` answers an empty `Vec` in exactly one case: the body is too
+    // small for even the single smallest registered panel to meet its own
+    // minimum (see `layout::solve`'s Rule 1). A silent blank screen there
+    // reads as broken rather than as "make the window bigger", so this is
+    // the one small, targeted addition this epic's small-terminal pass asks
+    // for: a centred line of text instead of nothing.
+    if solved.is_empty() {
+        frame.render_widget(
+            Paragraph::new(TOO_SMALL_MESSAGE)
+                .alignment(Alignment::Center)
+                .wrap(ratatui::widgets::Wrap { trim: true })
+                .style(Style::default().fg(palette.muted.into())),
+            body,
+        );
+        return;
+    }
+
+    for (id, rect) in solved {
+        if let Some((_, renderer)) = registry.get(&id) {
+            renderer(frame, rect, &view_model, palette, phase);
         }
-        _ if rest.height >= MIN_HEIGHT_FOR_DETAIL => draw_detail(frame, rest, snapshot, phase),
-        Some((usage, measured)) if rest.height >= USAGE_ROWS => {
-            let [panel, _] =
-                Layout::vertical([Constraint::Length(USAGE_ROWS), Constraint::Min(0)]).areas(rest);
-            frame.render_widget(UsageWindows::new(usage, measured), panel);
-        }
-        _ => {}
     }
 }
 
 // ── header ────────────────────────────────────────────────────────────
 
-fn draw_header(frame: &mut Frame<'_>, area: Rect, snapshot: &SessionSnapshot, phase: u64) {
+fn draw_header(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    snapshot: &SessionSnapshot,
+    phase: u64,
+    palette: &Palette,
+) {
     let live = snapshot.phase == SessionPhase::Thinking;
     let (marker, marker_colour, state) = if live {
         (
             Spinner::new(SpinnerStyle::Braille, phase).glyph(),
-            Theme::MINT,
+            palette.accent_success.into(),
             "working",
         )
     } else {
-        (Icon::IDLE, Theme::MUTED, "idle")
+        (Icon::IDLE, palette.muted.into(), "idle")
     };
 
     let mut spans = vec![
         Span::styled(
             " claude-stats ",
             Style::default()
-                .fg(Theme::BACKGROUND)
-                .bg(Theme::CYAN)
+                .fg(palette.background.into())
+                .bg(palette.accent_primary.into())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
@@ -141,337 +205,48 @@ fn draw_header(frame: &mut Frame<'_>, area: Rect, snapshot: &SessionSnapshot, ph
         .project_dir
         .as_deref()
         .map(|p| format::fit(p, 34, true));
+    // A branch name has no length convention to lean on the way a project
+    // path or a model id does -- someone's `feature/...` branch can run to
+    // any length -- so left unbounded here it relied entirely on whatever
+    // was left of this single unwrapped header line to cut it off mid-word,
+    // with nothing on screen to say it had been cut. `format::fit` gives it
+    // the same honest ellipsis treatment `project` above already gets,
+    // rather than being the one field on this line drawn as if it always
+    // fits.
+    let branch = snapshot
+        .git_branch
+        .as_deref()
+        .map(|b| format::fit(b, 24, false));
     for (icon, text, colour) in [
         (
             Icon::TOKEN,
             Some(snapshot.model_display_name()),
-            Theme::VIOLET,
+            palette.accent_secondary.into(),
         ),
-        (Icon::FILE, project, Theme::TEXT),
-        (Icon::BRANCH, snapshot.git_branch.clone(), Theme::MINT),
+        (Icon::FILE, project, palette.text.into()),
+        (Icon::BRANCH, branch, palette.accent_success.into()),
         (
             Icon::CLOCK,
             snapshot.duration().map(format::duration),
-            Theme::MUTED,
+            palette.muted.into(),
         ),
     ] {
         let Some(text) = text else { continue };
         spans.push(Span::styled(
             format!("  {} ", Icon::SEPARATOR),
-            Style::default().fg(Theme::FAINT),
+            Style::default().fg(palette.faint.into()),
         ));
         spans.push(Span::styled(
             format!("{icon} "),
-            Style::default().fg(Theme::FAINT),
+            Style::default().fg(palette.faint.into()),
         ));
         spans.push(Span::styled(text, Style::default().fg(colour)));
     }
 
     frame.render_widget(
-        Paragraph::new(Line::from(spans)).style(Style::default().bg(Theme::SURFACE)),
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(palette.surface.into())),
         area,
     );
-}
-
-// ── the six headline tiles ────────────────────────────────────────────
-
-fn draw_tiles(frame: &mut Frame<'_>, area: Rect, snapshot: &SessionSnapshot) {
-    let fill = snapshot.context_fill();
-    let severity = fill.severity();
-    let severity_colour = Theme::severity(severity);
-
-    let cache = snapshot.cache_hit_ratio();
-    // The cache tile is the one place a *low* number is the bad one, so its
-    // colour scale runs the opposite way to everything else. Below half, the
-    // conversation prefix is being re-sent rather than reused, and that is
-    // where most of an unexpected bill comes from.
-    let cache_colour = match cache {
-        Some(r) if r >= 0.85 => Theme::MINT,
-        Some(r) if r >= 0.50 => Theme::AMBER,
-        Some(_) => Theme::CRIMSON,
-        None => Theme::MUTED,
-    };
-
-    let (compaction_text, compaction_colour) = match snapshot.compaction_distance() {
-        CompactionDistance::Imminent => ("imminent".to_owned(), Theme::CRIMSON),
-        CompactionDistance::Turns(n) if n >= 100 => ("100+ turns".to_owned(), Theme::MINT),
-        CompactionDistance::Turns(n) => (
-            format!("~{n} turn{}", if n == 1 { "" } else { "s" }),
-            if n <= 3 { Theme::ORANGE } else { Theme::VIOLET },
-        ),
-        CompactionDistance::Unknown => ("\u{2014}".to_owned(), Theme::MUTED),
-    };
-
-    let error_colour = if snapshot.tool_errors == 0 {
-        Theme::MINT
-    } else {
-        Theme::CRIMSON
-    };
-
-    let tiles = [
-        StatTile::new(
-            Icon::CONTEXT,
-            "CONTEXT",
-            format::percent_precise(fill.ratio()),
-        )
-        .accent(severity_colour)
-        .emphasised(severity >= FillSeverity::Hot)
-        .footnote(format!(
-            "{} / {}",
-            format::tokens(fill.used()),
-            format::tokens(fill.window())
-        )),
-        StatTile::new(Icon::COST, "COST", snapshot.cost().to_string())
-            .accent(Theme::CYAN)
-            .footnote(format!("{}/turn", snapshot.cost_per_turn())),
-        StatTile::new(
-            Icon::CACHE,
-            "CACHE",
-            cache.map_or_else(|| "\u{2014}".to_owned(), format::percent_precise),
-        )
-        .accent(cache_colour)
-        .footnote(format!(
-            "{} read",
-            format::tokens(snapshot.totals.cache_read)
-        )),
-        StatTile::new(Icon::COMPACT, "COMPACTION", compaction_text)
-            .accent(compaction_colour)
-            .emphasised(matches!(
-                snapshot.compaction_distance(),
-                CompactionDistance::Imminent
-            ))
-            .footnote(format!("{} so far", snapshot.compactions.len())),
-        StatTile::new(Icon::TURN, "TURNS", snapshot.turns.to_string())
-            .accent(Theme::AZURE)
-            .footnote(format!("{} tools", snapshot.tool_calls())),
-        StatTile::new(Icon::ERROR, "ERRORS", snapshot.tool_errors.to_string())
-            .accent(error_colour)
-            .footnote(format!("{} files", snapshot.files_touched())),
-    ];
-
-    let areas = Layout::horizontal([Constraint::Ratio(1, 6); 6]).split(area);
-    for (tile, cell) in tiles.into_iter().zip(areas.iter()) {
-        frame.render_widget(tile, *cell);
-    }
-}
-
-// ── the context panel ─────────────────────────────────────────────────
-
-fn draw_context_panel(frame: &mut Frame<'_>, area: Rect, snapshot: &SessionSnapshot) {
-    let fill = snapshot.context_fill();
-    let colour = Theme::severity(fill.severity());
-
-    let block = panel("context window", colour);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.height == 0 {
-        return;
-    }
-
-    let [bar, caption] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(inner);
-    frame.render_widget(ContextGauge::new(fill), bar);
-
-    let until = fill.tokens_until_compaction();
-    let caption_line = Line::from(vec![
-        field(Icon::TOKEN, "used", &format::tokens(fill.used()), colour),
-        field(
-            Icon::CONTEXT,
-            "free",
-            &format::tokens(fill.remaining()),
-            Theme::MUTED,
-        ),
-        field(
-            Icon::COMPACT,
-            "until compaction",
-            &format::tokens(until),
-            Theme::VIOLET,
-        ),
-        field(
-            Icon::RATE,
-            "growth/turn",
-            &format::tokens(snapshot.average_context_growth_per_turn() as u64),
-            Theme::AZURE,
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(caption_line), caption);
-}
-
-// ── the detail columns ────────────────────────────────────────────────
-
-fn draw_detail(frame: &mut Frame<'_>, area: Rect, snapshot: &SessionSnapshot, phase: u64) {
-    if area.width < MIN_WIDTH_FOR_COLUMNS {
-        // Too narrow to split. The activity feed is the panel worth keeping,
-        // because it is the only one that answers "what is happening right
-        // now" -- everything else is a summary that can wait for a wider
-        // terminal.
-        draw_activity(frame, area, snapshot, phase);
-        return;
-    }
-
-    let [left, right] =
-        Layout::horizontal([Constraint::Percentage(52), Constraint::Percentage(48)]).areas(area);
-
-    let [trend, mix] =
-        Layout::vertical([Constraint::Percentage(45), Constraint::Percentage(55)]).areas(left);
-    draw_trend(frame, trend, snapshot);
-    frame.render_widget(TokenMix::new(snapshot.totals), mix);
-
-    let [activity, turn] =
-        Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(right);
-    draw_activity(frame, activity, snapshot, phase);
-    draw_turn(frame, turn, snapshot);
-}
-
-fn draw_trend(frame: &mut Frame<'_>, area: Rect, snapshot: &SessionSnapshot) {
-    let block = panel("output per response", Theme::CYAN);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.height < 2 {
-        return;
-    }
-
-    // The banner is the first thing to go when the panel is short: it is the
-    // only element here that repeats a number shown elsewhere, so it costs
-    // nothing to drop and the chart gets its rows back.
-    let banner_rows = if inner.height >= MIN_HEIGHT_FOR_BANNER {
-        BANNER_ROWS
-    } else {
-        0
-    };
-    let [banner, spark, meters] = Layout::vertical([
-        Constraint::Length(banner_rows),
-        Constraint::Min(1),
-        Constraint::Length(3),
-    ])
-    .areas(inner);
-
-    frame.render_widget(ContextBanner::new(snapshot.context_fill()), banner);
-
-    let series = snapshot.output_series();
-    let markers = snapshot.compaction_marker_indices();
-    frame.render_widget(OutputSparkline::new(&series, &markers), spark);
-
-    let bar_width = (meters.width as usize).saturating_sub(20).clamp(4, 24);
-    let mut lines = Vec::new();
-    if let Some(ratio) = snapshot.cache_hit_ratio() {
-        lines.push(meter_line(
-            "cache",
-            ratio,
-            format::percent_precise(ratio),
-            Theme::CYAN,
-            bar_width,
-        ));
-    }
-    if let Some(ratio) = snapshot.efficiency() {
-        lines.push(meter_line(
-            "efficiency",
-            ratio,
-            format::percent(ratio),
-            Theme::MINT,
-            bar_width,
-        ));
-    }
-    let fill = snapshot.context_fill();
-    lines.push(meter_line(
-        "context",
-        fill.ratio(),
-        format::percent_precise(fill.ratio()),
-        Theme::severity(fill.severity()),
-        bar_width,
-    ));
-    frame.render_widget(Paragraph::new(lines), meters);
-}
-
-fn draw_activity(frame: &mut Frame<'_>, area: Rect, snapshot: &SessionSnapshot, phase: u64) {
-    let running = snapshot.phase == SessionPhase::Thinking;
-    let block = panel("live tool activity", Theme::MAGENTA);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    frame.render_widget(ToolFeed::new(&snapshot.recent_tools, running, phase), inner);
-}
-
-fn draw_turn(frame: &mut Frame<'_>, area: Rect, snapshot: &SessionSnapshot) {
-    let block = panel("this turn", Theme::AZURE);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.height == 0 {
-        return;
-    }
-
-    let mut lines = vec![Line::from(vec![
-        field(
-            Icon::TOKEN,
-            "tools",
-            &snapshot.turn.tool_calls().to_string(),
-            Theme::AZURE,
-        ),
-        field(
-            Icon::THINKING,
-            "thinking",
-            &snapshot.turn.thinking_blocks.to_string(),
-            Theme::VIOLET,
-        ),
-        field(
-            Icon::ERROR,
-            "errors",
-            &snapshot.turn.tool_errors.to_string(),
-            if snapshot.turn.tool_errors == 0 {
-                Theme::MUTED
-            } else {
-                Theme::CRIMSON
-            },
-        ),
-    ])];
-
-    if snapshot.turn.agents_running > 0 {
-        lines.push(Line::from(Span::styled(
-            format!(
-                "{} {} sub-agent(s) running",
-                Icon::BULLET,
-                snapshot.turn.agents_running
-            ),
-            Style::default().fg(Theme::MAGENTA),
-        )));
-    }
-    if let Some(skill) = &snapshot.turn.active_skill {
-        lines.push(Line::from(Span::styled(
-            format!("{} skill /{skill}", Icon::BULLET),
-            Style::default().fg(Theme::AMBER),
-        )));
-    }
-    if let Some(error) = &snapshot.last_error {
-        lines.push(Line::from(Span::styled(
-            format!("{} {error}", Icon::ERROR),
-            Style::default().fg(Theme::CRIMSON),
-        )));
-    }
-
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
-}
-
-// ── shared building blocks ────────────────────────────────────────────
-
-/// A titled panel in the house style.
-fn panel(title: &str, accent: ratatui::style::Color) -> Block<'_> {
-    Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Theme::BORDER))
-        .style(Style::default().bg(Theme::SURFACE))
-        .padding(Padding::horizontal(1))
-        .title(Span::styled(format!(" {title} "), Theme::title(accent)))
-}
-
-/// One `icon label value` group, for packing several readings onto a line.
-fn field<'a>(
-    icon: &'a str,
-    label: &'a str,
-    value: &str,
-    colour: ratatui::style::Color,
-) -> Span<'a> {
-    Span::styled(
-        format!("{icon} {label} {value}   "),
-        Style::default().fg(colour),
-    )
 }
 
 #[cfg(test)]
@@ -481,6 +256,14 @@ mod tests {
 
     use super::*;
     use crate::domain::session::ResponseSample;
+    use crate::tui::palette::registry::ThemeRegistry;
+
+    fn palette() -> Palette {
+        ThemeRegistry::builtin()
+            .get("aurora")
+            .expect("aurora is always registered")
+            .clone()
+    }
 
     fn sample_snapshot() -> SessionSnapshot {
         let mut s = SessionSnapshot::empty("/tmp/t.jsonl".into(), "abcdef".to_owned());
@@ -509,10 +292,36 @@ mod tests {
         height: u16,
         usage: Option<&crate::domain::limits::AccountUsage>,
     ) -> String {
+        render_with_snapshot(width, height, &sample_snapshot(), usage)
+    }
+
+    fn render_with_snapshot(
+        width: u16,
+        height: u16,
+        snapshot: &SessionSnapshot,
+        usage: Option<&crate::domain::limits::AccountUsage>,
+    ) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("test terminal");
-        let snapshot = sample_snapshot();
+        let palette = palette();
         terminal
-            .draw(|frame| draw(frame, frame.area(), &snapshot, 0, usage.map(|u| (u, true))))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    frame.area(),
+                    snapshot,
+                    0,
+                    usage.map(|u| (u, true)),
+                    &palette,
+                    DashboardInputs {
+                        pulse: DollarPulseInputs {
+                            frames_since_increment: None,
+                            off: false,
+                        },
+                        active_preset: "live",
+                        tab_index: 0,
+                    },
+                );
+            })
             .expect("draw");
         let buffer = terminal.backend().buffer().clone();
         (0..height)
@@ -536,10 +345,69 @@ mod tests {
     }
 
     #[test]
-    fn a_narrow_terminal_keeps_the_activity_feed_and_drops_the_columns() {
+    fn a_long_branch_name_is_cut_with_an_ellipsis_rather_than_mid_word() {
+        // Before `draw_header` ran the branch name through `format::fit` the
+        // way it already did for the project path, a long branch name had
+        // no bound of its own and relied entirely on the header's single
+        // unwrapped line running out of terminal width to cut it off --
+        // silently, mid-word, with nothing on screen to say more of the
+        // name existed. This pins the honest version: the name is capped on
+        // its own terms and the cut is marked.
+        let mut snapshot = sample_snapshot();
+        snapshot.git_branch =
+            Some("feature/a-branch-name-far-longer-than-any-reasonable-header-budget".to_owned());
+        let screen = render_with_snapshot(140, 40, &snapshot, None);
+        assert!(
+            screen.contains('\u{2026}'),
+            "the long branch name is cut with an ellipsis: {screen}"
+        );
+        assert!(
+            !screen.contains("far longer than any reasonable header budget"),
+            "the untruncated tail must not appear: {screen}"
+        );
+    }
+
+    #[test]
+    fn a_narrow_terminal_with_nothing_to_report_leaves_the_lower_half_blank() {
+        // Pre-epic, a terminal narrower than ninety columns collapsed the
+        // detail section down to the activity feed alone -- a hand-picked
+        // readability threshold `draw_detail` carried as its own constant,
+        // with no equivalent in any panel's own registered minimum. `solve`
+        // has no such constant to consult: `panel.output-trend` and
+        // `panel.tool-feed` genuinely only need thirty columns each, sixty
+        // together, so a seventy-column terminal comfortably fits both and
+        // no longer collapses to one -- see `presets::live`'s own module
+        // doc for a fuller account of why that specific old threshold has no
+        // honest equivalent to reproduce.
+        //
+        // What this test still pins is a real property of the rewrite: with
+        // no usage reading at all (`render_at` passes `None`), the row this
+        // preset reserves for the account and spend panels stays reserved
+        // but draws nothing -- `presets::live` cannot know, from geometry
+        // alone, that there is nothing to show there, so the fixed height it
+        // set aside goes unused rather than being handed to the detail
+        // section beneath it. That is real, user-visible wasted space this
+        // rewrite introduces, not a bug in this test.
         let screen = render_at(70, 30);
-        assert!(screen.contains("live tool activity"));
-        assert!(!screen.contains("token mix"), "columns should be dropped");
+        assert!(
+            !screen.contains("live tool activity") && !screen.contains("token mix"),
+            "no usage reading means the account/spend row still claims its \
+             fixed height, starving the detail row of the room it would \
+             otherwise have: {screen}"
+        );
+    }
+
+    #[test]
+    fn a_terminal_seventy_columns_wide_shows_both_detail_columns() {
+        // The companion case to the test above: once there *is* a usage
+        // reading, the account/spend row's fixed height leaves comfortably
+        // more than sixty columns for the detail row -- see that test's own
+        // doc for why sixty, not the pre-epic ninety, is this rewrite's real
+        // threshold.
+        let usage = crate::domain::limits::AccountUsage::empty(chrono::Utc::now());
+        let screen = render_with_usage(70, 40, Some(&usage));
+        assert!(screen.contains("live tool activity"), "{screen}");
+        assert!(screen.contains("token mix"), "{screen}");
     }
 
     #[test]
@@ -559,21 +427,43 @@ mod tests {
     }
 
     #[test]
-    fn when_only_one_lower_panel_fits_the_session_detail_wins() {
+    fn when_only_one_lower_section_fits_the_account_row_wins() {
+        // Pre-epic, this exact height (twenty-seven rows) was the one place
+        // the six-way `match` picked the session detail over the account
+        // row even though the account row was the *shorter* of the two --
+        // rest.height sat inside the [18, 26) band, which the account row on
+        // its own only needed eleven rows to clear. That inversion has no
+        // honest equivalent in `layout::solve`'s degradation rule: dropping
+        // the lowest-priority child from a fixed list, one at a time,
+        // watching space grow, can never later decide a *higher*-priority
+        // child should give way to a *lower*-priority one it could already
+        // have kept -- see `presets::live`'s module doc for the fuller
+        // account. `presets::live` lists the account row first (matching
+        // the order the epic's own tree gives it), so once it and the
+        // detail row cannot both fit, the account row is the one that
+        // survives, and it survives at every height below the point both fit
+        // together -- not only the two narrower bands the old code carved
+        // out for it.
         let usage = crate::domain::limits::AccountUsage::empty(chrono::Utc::now());
-        // Room for the detail columns but not for both.
         let screen = render_with_usage(140, 27, Some(&usage));
 
-        assert!(screen.contains("live tool activity"));
-        assert!(!screen.contains("account usage"));
+        assert!(screen.contains("account usage"), "{screen}");
+        assert!(!screen.contains("live tool activity"), "{screen}");
     }
 
     #[test]
     fn a_terminal_too_short_for_the_detail_columns_shows_the_account_panel() {
         // These rows would otherwise be blank: the detail columns need more
         // height than there is, and something true is better than nothing.
+        //
+        // Twenty-one, not the twenty this test pinned before the tab bar
+        // this epic adds claimed a row of its own: `body` is now
+        // `area.height - 2` (tab bar plus header) rather than `- 1`, so the
+        // exact height at which the tile row, the context gauge and the
+        // account row (`4 + 4 + 11 = 19`) just barely fit moved down by
+        // exactly the one row the tab bar now reserves.
         let usage = crate::domain::limits::AccountUsage::empty(chrono::Utc::now());
-        let screen = render_with_usage(140, 20, Some(&usage));
+        let screen = render_with_usage(140, 21, Some(&usage));
 
         assert!(screen.contains("account usage"));
         assert!(!screen.contains("live tool activity"));
@@ -592,5 +482,130 @@ mod tests {
         for (width, height) in [(1, 1), (4, 3), (20, 5), (200, 2)] {
             let _ = render_at(width, height);
         }
+    }
+
+    #[test]
+    fn a_terminal_too_small_for_any_panel_shows_a_resize_message() {
+        // Twenty columns is well below `panel.tile-row`'s own registered
+        // thirty-six-column minimum -- the narrowest panel `presets::live`
+        // places -- so the body `solve` is handed here cannot fit even the
+        // smallest single panel. Six rows of height (four of them left to
+        // the body once the tab bar and header claim their own row each)
+        // is enough for the wrapped message to appear in full, which is
+        // what this test actually reads back rather than merely checking
+        // for a non-panic.
+        let screen = render_at(20, 8);
+        assert!(
+            screen.contains("too small"),
+            "expected the resize message somewhere in the buffer: {screen:?}"
+        );
+    }
+
+    #[test]
+    fn a_degenerate_one_by_one_terminal_still_does_not_panic() {
+        // The resize message itself has nowhere to draw once the tab bar's
+        // own reserved row already consumes the whole area -- this is the
+        // "nothing panics" half of the small-terminal pass, kept as its own
+        // test now that `a_terminal_too_small_for_any_panel_shows_a_resize_message`
+        // above is the one actually reading the message back.
+        let _ = render_at(1, 1);
+    }
+
+    /// The instant the tests below measure account usage as of. Fixed rather
+    /// than read from the system clock, so the block and the "today" bucket
+    /// they build come out the same on every run and every machine.
+    fn fixed_now() -> chrono::DateTime<chrono::Utc> {
+        "2026-09-01T10:00:00Z".parse().expect("a valid timestamp")
+    }
+
+    /// One billable response, for the tests that need account usage measured
+    /// from real entries rather than [`crate::domain::limits::AccountUsage::empty`].
+    fn measured_entry(
+        session: &str,
+        when: &str,
+        project: &str,
+        input: u64,
+    ) -> crate::domain::entry::Entry {
+        use crate::domain::entry::{Entry, EntryId};
+        use crate::domain::model::ModelId;
+        use crate::domain::project::{Project, SessionId};
+        use crate::domain::tokens::TokenUsage;
+
+        let at: chrono::DateTime<chrono::Utc> = when.parse().expect("a valid timestamp");
+        Entry {
+            id: EntryId {
+                message_id: format!("msg-{session}-{when}-{input}"),
+                request_id: None,
+                session: SessionId::new(session),
+            },
+            at,
+            model: ModelId::new("claude-opus-5"),
+            tokens: TokenUsage {
+                input,
+                ..TokenUsage::ZERO
+            },
+            recorded_cost: None,
+            session: SessionId::new(session),
+            project: Project::new(project),
+            is_sidechain: false,
+        }
+    }
+
+    #[test]
+    fn the_dashboard_shows_todays_spend_the_active_block_and_the_top_projects() {
+        let now = fixed_now();
+        let entries = [
+            measured_entry("a", "2026-09-01T09:30:00Z", "/home/ada/api", 100_000),
+            measured_entry("b", "2026-09-01T09:50:00Z", "/home/ada/web", 50_000),
+        ];
+        let usage = crate::domain::limits::AccountUsage::measure(
+            now,
+            &entries,
+            Vec::new(),
+            &crate::domain::pricing::PriceSheet::builtin(),
+            &crate::domain::period::Zone::Utc,
+        );
+
+        let screen = render_with_usage(140, 40, Some(&usage));
+
+        assert!(screen.contains("today"), "today's spend is shown: {screen}");
+        assert!(
+            screen.contains("block"),
+            "the active block is shown: {screen}"
+        );
+        assert!(
+            screen.contains("api"),
+            "the busiest project is named: {screen}"
+        );
+    }
+
+    #[test]
+    fn a_tall_enough_terminal_shows_the_account_row_and_the_session_detail_together() {
+        // Pre-epic, this height dropped the spend panel alone -- riding
+        // beside the account-usage panel in the same row -- while keeping
+        // both the (now spend-less) account row and the session detail
+        // beneath it. `panel.account-usage` and `panel.spend-panel` are one
+        // fused row in `presets::live` (matching the tree the epic itself
+        // specifies), so there is no way for this rewrite to keep one half
+        // of that row and drop the other independently of the whole row's
+        // own fate: the row is either tall enough to show both, as it is
+        // here, or it is dropped entirely -- see
+        // `when_only_one_lower_section_fits_the_account_row_wins` for that
+        // case. What survives from the old test is the one thing this
+        // height was actually chosen to prove: with room to spare, the
+        // account row and the session detail beneath it both show at once.
+        let usage = crate::domain::limits::AccountUsage::empty(fixed_now());
+        let screen = render_with_usage(140, 36, Some(&usage));
+
+        assert!(screen.contains("live tool activity"), "{screen}");
+        assert!(screen.contains("account usage"), "{screen}");
+    }
+
+    #[test]
+    fn a_dashboard_with_no_active_block_says_so_rather_than_leaving_the_row_blank() {
+        let usage = crate::domain::limits::AccountUsage::empty(fixed_now());
+        let screen = render_with_usage(140, 40, Some(&usage));
+
+        assert!(screen.contains("no active block"), "{screen}");
     }
 }

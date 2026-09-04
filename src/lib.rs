@@ -10,6 +10,8 @@
 //!   than against files.
 //! * [`infrastructure`] -- the adapters that implement those traits by reading
 //!   Claude Code's own storage.
+//! * [`view`] -- presentation that is not a terminal: number formatting and
+//!   the table view models the text reports render.
 //! * [`tui`] -- the terminal presentation. It reads the domain and never
 //!   computes anything the domain could compute for it.
 //!
@@ -22,3 +24,4 @@ pub mod domain;
 pub mod infrastructure;
 pub mod report;
 pub mod tui;
+pub mod view;
